@@ -1,0 +1,193 @@
+version: 2
+
+models:
+  - name: stg_courses
+    description: Course module and presentation metadata staged from OULAD.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: module_presentation_length
+        description: Length of the module presentation in days.
+        data_tests:
+          - not_null
+
+  - name: stg_assessments
+    description: Assessment definitions staged from OULAD.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_assessment
+        description: Unique assessment identifier.
+        data_tests:
+          - not_null
+          - unique
+      - name: assessment_type
+        description: Type of assessment.
+        data_tests:
+          - not_null
+      - name: date
+        description: Assessment date relative to the presentation start.
+      - name: weight
+        description: Assessment weight in the course presentation.
+
+  - name: stg_vle
+    description: Virtual learning environment activity metadata staged from OULAD.
+    columns:
+      - name: id_site
+        description: Unique VLE site identifier.
+        data_tests:
+          - not_null
+          - unique
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: activity_type
+        description: Type of VLE activity.
+        data_tests:
+          - not_null
+      - name: week_from
+        description: First week the VLE activity is available, when provided.
+      - name: week_to
+        description: Last week the VLE activity is available, when provided.
+
+  - name: stg_student_info
+    description: Student demographics, study context, and final result.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: gender
+        description: Student gender category.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["M", "F"]
+      - name: region
+        description: Student region.
+        data_tests:
+          - not_null
+      - name: highest_education
+        description: Highest education level reported for the student.
+      - name: imd_band
+        description: Index of Multiple Deprivation band, where available.
+      - name: age_band
+        description: Student age band.
+      - name: num_of_prev_attempts
+        description: Number of previous attempts for the module.
+      - name: studied_credits
+        description: Number of credits studied by the student.
+      - name: disability
+        description: Student disability indicator.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Y", "N"]
+      - name: final_result
+        description: Student final result for the module presentation.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Distinction", "Pass", "Fail", "Withdrawn"]
+
+  - name: stg_student_registration
+    description: Student registration and unregistration dates.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: date_registration
+        description: Registration date relative to the presentation start.
+      - name: date_unregistration
+        description: Unregistration date when a student withdrew.
+
+  - name: stg_student_assessment
+    description: Student assessment submissions and scores.
+    columns:
+      - name: id_assessment
+        description: Assessment identifier.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: date_submitted
+        description: Submission date relative to the presentation start.
+        data_tests:
+          - not_null
+      - name: is_banked
+        description: Indicator for whether the assessment was banked.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+                quote: false
+      - name: score
+        description: Assessment score, where available.
+
+  - name: stg_student_vle
+    description: Student VLE interaction counts by site and date.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: id_site
+        description: VLE site identifier.
+        data_tests:
+          - not_null
+      - name: date
+        description: Interaction date relative to the presentation start.
+        data_tests:
+          - not_null
+      - name: sum_click
+        description: Number of clicks recorded for the student, site, and date.
+        data_tests:
+          - not_null
