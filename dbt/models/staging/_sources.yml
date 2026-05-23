@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: raw_oulad
+    schema: main
+    description: Raw OULAD tables loaded from CSV files into DuckDB.
+    tables:
+      - name: raw_courses
+        description: Course module and presentation metadata.
+      - name: raw_assessments
+        description: Assessment definitions, dates, types, and weights.
+      - name: raw_vle
+        description: Virtual learning environment activity metadata.
+      - name: raw_student_info
+        description: Student demographics, study context, and final outcomes.
+      - name: raw_student_registration
+        description: Student registration and unregistration dates.
+      - name: raw_student_assessment
+        description: Student assessment submissions, banking flags, and scores.
+      - name: raw_student_vle
+        description: Student VLE interaction counts by site and date.

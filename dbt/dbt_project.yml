@@ -1,0 +1,21 @@
+name: learning_analytics_intelligence_platform
+version: "1.0.0"
+config-version: 2
+
+profile: laip
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+
+models:
+  learning_analytics_intelligence_platform:
+    +materialized: view
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
+
