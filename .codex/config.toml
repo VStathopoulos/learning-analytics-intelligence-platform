@@ -1,0 +1,17 @@
+approval_policy = "on-request"
+default_permissions = "laip-workspace"
+
+[permissions.laip-workspace.workspace_roots]
+"/home/sulfamidas/projects/learning-analytics-intelligence-platform" = true
+
+[permissions.laip-workspace.filesystem]
+":minimal" = "read"
+
+[permissions.laip-workspace.filesystem.":workspace_roots"]
+"." = "write"
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+".codex/config.toml" = "read"
+
+[permissions.laip-workspace.network]
+enabled = false

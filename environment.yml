@@ -1,0 +1,26 @@
+name: laip
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - pyarrow
+  - python-duckdb
+  - dash
+  - plotly
+  - dash-bootstrap-components
+  - scikit-learn
+  - requests
+  - python-dotenv
+  - pyyaml
+  - jupyter
+  - ipykernel
+  - pytest
+  - ruff
+  - black=25.1.0
+  - pathspec=0.12.1
+  - pre-commit
+  - pip
+  - pip:
+      - dbt-duckdb==1.10.1

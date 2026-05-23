@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# Data
+data/raw/*
+data/interim/*
+data/processed/*
+data/warehouse/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/warehouse/.gitkeep
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# Airflow
+airflow_home/
+logs/
+
+# Dash / local outputs
+*.sqlite
+*.db
+*.duckdb
+*.parquet
+
+# Codex local runtime artifacts
+.codex/logs/
+
+# OS / editor
+.DS_Store
+.vscode/
