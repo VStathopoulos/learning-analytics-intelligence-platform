@@ -15,7 +15,7 @@ final dbt model definitions.
 
 - `code_module`
 - `code_presentation`
-- `length`
+- `module_presentation_length`
 
 ### assessments.csv
 
