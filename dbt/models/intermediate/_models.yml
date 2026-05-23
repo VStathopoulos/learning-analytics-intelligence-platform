@@ -1,0 +1,119 @@
+version: 2
+
+models:
+  - name: int_student_module_enrollments
+    description: Student module enrollment context with registration status flags.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: final_result
+        description: Final outcome for the student in the module presentation.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Distinction", "Pass", "Fail", "Withdrawn"]
+      - name: date_registration
+        description: Registration date relative to the presentation start.
+      - name: date_unregistration
+        description: Unregistration date when a student withdrew.
+      - name: is_withdrawn
+        description: Boolean flag indicating whether the final result is Withdrawn.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_unregistered
+        description: Boolean flag indicating whether an unregistration date exists.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+  - name: int_assessment_submissions
+    description: Student assessment submissions enriched with assessment metadata.
+    columns:
+      - name: code_module
+        description: Course module code from the assessment definition.
+      - name: code_presentation
+        description: Course presentation code from the assessment definition.
+      - name: id_assessment
+        description: Assessment identifier.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: assessment_type
+        description: Type of assessment submitted.
+        data_tests:
+          - not_null
+      - name: assessment_date
+        description: Assessment date relative to the presentation start.
+      - name: date_submitted
+        description: Submission date relative to the presentation start.
+        data_tests:
+          - not_null
+      - name: submission_delay_days
+        description: Difference between submission date and assessment date.
+      - name: is_banked
+        description: Indicator for whether the assessment submission was banked.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+                quote: false
+      - name: score
+        description: Assessment score, where available.
+      - name: weight
+        description: Assessment weight in the course presentation.
+      - name: weighted_score
+        description: Score weighted by the assessment contribution.
+
+  - name: int_vle_daily_engagement
+    description: Daily student VLE engagement aggregated across active sites.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: activity_date
+        description: VLE activity date relative to the presentation start.
+        data_tests:
+          - not_null
+      - name: total_clicks
+        description: Total VLE clicks recorded for the student on the activity date.
+        data_tests:
+          - not_null
+      - name: active_site_count
+        description: Count of distinct VLE sites used by the student on the date.
+        data_tests:
+          - not_null
+      - name: activity_type_count
+        description: Count of distinct VLE activity types used on the date.
+        data_tests:
+          - not_null
