@@ -1,0 +1,147 @@
+version: 2
+
+models:
+  - name: dim_student_module
+    description: Student-level module dimension for dashboard filtering and cohort analysis.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: gender
+        description: Student gender category.
+      - name: region
+        description: Student region.
+      - name: highest_education
+        description: Highest education level reported for the student.
+      - name: imd_band
+        description: Index of Multiple Deprivation band, where available.
+      - name: age_band
+        description: Student age band.
+      - name: num_of_prev_attempts
+        description: Number of previous attempts for the module.
+      - name: studied_credits
+        description: Number of credits studied by the student.
+      - name: disability
+        description: Student disability indicator.
+      - name: final_result
+        description: Student final result for the module presentation.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Distinction", "Pass", "Fail", "Withdrawn"]
+      - name: date_registration
+        description: Registration date relative to the presentation start.
+      - name: date_unregistration
+        description: Unregistration date when a student withdrew.
+      - name: is_withdrawn
+        description: Boolean flag indicating whether the final result is Withdrawn.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_unregistered
+        description: Boolean flag indicating whether an unregistration date exists.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+  - name: fct_course_engagement_daily
+    description: Daily course-presentation engagement metrics for dashboard trends.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: activity_date
+        description: VLE activity date relative to the presentation start.
+        data_tests:
+          - not_null
+      - name: active_students
+        description: Count of distinct students with VLE activity on the date.
+        data_tests:
+          - not_null
+      - name: total_clicks
+        description: Total VLE clicks recorded on the date.
+        data_tests:
+          - not_null
+      - name: average_clicks_per_active_student
+        description: Average clicks per active student on the date.
+        data_tests:
+          - not_null
+      - name: total_active_sites
+        description: Total active VLE site counts across active students.
+        data_tests:
+          - not_null
+      - name: average_active_sites_per_active_student
+        description: Average active VLE sites per active student.
+        data_tests:
+          - not_null
+      - name: total_activity_types
+        description: Total activity type counts across active students.
+        data_tests:
+          - not_null
+      - name: average_activity_types_per_active_student
+        description: Average activity types per active student.
+        data_tests:
+          - not_null
+
+  - name: fct_assessment_performance
+    description: Assessment-level submission and performance metrics for dashboards.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_assessment
+        description: Assessment identifier.
+        data_tests:
+          - not_null
+      - name: assessment_type
+        description: Type of assessment.
+        data_tests:
+          - not_null
+      - name: assessment_date
+        description: Assessment date relative to the presentation start.
+      - name: submitted_assessments
+        description: Count of submitted assessment records.
+        data_tests:
+          - not_null
+      - name: distinct_students_submitted
+        description: Count of distinct students who submitted the assessment.
+        data_tests:
+          - not_null
+      - name: average_score
+        description: Average submitted assessment score.
+        data_tests:
+          - not_null
+      - name: average_weighted_score
+        description: Average score weighted by assessment contribution.
+      - name: average_submission_delay_days
+        description: Average delay between assessment date and submission date.
+      - name: banked_submission_count
+        description: Count of banked submissions.
+        data_tests:
+          - not_null
