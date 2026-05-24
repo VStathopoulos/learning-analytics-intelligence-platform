@@ -134,6 +134,18 @@ FINAL_RESULT_COLORS = {
     "Fail": DASHBOARD_COLORS["warning"],
     "Withdrawn": DASHBOARD_COLORS["danger"],
 }
+FINAL_RESULT_OVERVIEW_COLORS = {
+    "Distinction": "#0891b2",
+    "Pass": "#16a34a",
+    "Fail": "#f97316",
+    "Withdrawn": "#dc2626",
+}
+LEARNING_JOURNEY_COLORS = {
+    "Enrolled students": "#1d4ed8",
+    "Active in VLE": "#7c3aed",
+    "Submitted assessment": "#db2777",
+    "Passed or distinction": "#0f766e",
+}
 STUDENT_RISK_COLUMNS = [
     "id_student",
     "code_module",
@@ -362,6 +374,13 @@ def format_decimal(value: float | None) -> str:
     return f"{value:.1f}"
 
 
+def format_count_with_percent(count: float | int, percent: float | None) -> str:
+    """Format a count with a display percentage."""
+    if percent is None or pd.isna(percent):
+        return f"{count:,.0f} (N/A)"
+    return f"{count:,.0f} ({percent:.1f}%)"
+
+
 def format_metric(value, metric_type: str = "decimal") -> str:
     """Format ML metrics for dashboard KPI cards and tables."""
     if value is None or pd.isna(value):
@@ -557,16 +576,43 @@ def build_final_result_figure(students: pd.DataFrame):
         .size()
         .rename(columns={"size": "student_count"})
     )
+    chart_total = chart_data["student_count"].sum()
+    chart_data["result_share"] = (
+        chart_data["student_count"] / chart_total * 100 if chart_total else None
+    )
+    chart_data["result_label"] = chart_data.apply(
+        lambda row: format_count_with_percent(
+            row["student_count"],
+            row["result_share"],
+        ),
+        axis=1,
+    )
+    bar_colors = (
+        chart_data["final_result"]
+        .map(FINAL_RESULT_OVERVIEW_COLORS)
+        .fillna(DASHBOARD_COLORS["muted"])
+    )
+
     figure = px.bar(
         chart_data,
         x="final_result",
         y="student_count",
         title="Final Result Distribution",
-        labels={"final_result": "Final Result", "student_count": "Students"},
-        color="final_result",
-        color_discrete_map=FINAL_RESULT_COLORS,
+        labels={
+            "final_result": "Final Result",
+            "student_count": "Students",
+            "result_share": "Share",
+        },
+        custom_data=["result_label"],
     )
-    figure.update_layout(showlegend=False)
+    figure.update_traces(
+        marker_color=bar_colors,
+        text=chart_data["result_label"],
+        texttemplate="%{text}",
+        textposition="auto",
+        hovertemplate="<b>%{x}</b><br>%{customdata[0]}<extra></extra>",
+    )
+    figure.update_layout(showlegend=False, uniformtext_minsize=10)
     return apply_chart_layout(figure)
 
 
@@ -651,22 +697,43 @@ def build_learning_journey_funnel_figure(
             ],
         }
     )
+    chart_data["stage_percent"] = (
+        chart_data["student_count"] / enrolled_students * 100
+        if enrolled_students
+        else None
+    )
+    chart_data["stage_label"] = chart_data.apply(
+        lambda row: format_count_with_percent(
+            row["student_count"],
+            row["stage_percent"],
+        ),
+        axis=1,
+    )
+    funnel_colors = (
+        chart_data["stage"]
+        .map(LEARNING_JOURNEY_COLORS)
+        .fillna(DASHBOARD_COLORS["muted"])
+    )
 
     figure = px.funnel(
         chart_data,
         x="student_count",
         y="stage",
         title="Learning Journey Funnel",
-        labels={"stage": "Learning Journey Stage", "student_count": "Students"},
-        color="stage",
-        color_discrete_map={
-            "Enrolled students": DASHBOARD_COLORS["primary"],
-            "Active in VLE": DASHBOARD_COLORS["secondary"],
-            "Submitted assessment": DASHBOARD_COLORS["warning"],
-            "Passed or distinction": DASHBOARD_COLORS["success"],
+        labels={
+            "stage": "Learning Journey Stage",
+            "student_count": "Students",
+            "stage_percent": "Share of Enrolled Students",
         },
+        custom_data=["stage_label"],
     )
-    figure.update_traces(texttemplate="%{value:,.0f}", textposition="inside")
+    figure.update_traces(
+        marker={"color": funnel_colors},
+        text=chart_data["stage_label"],
+        texttemplate="%{text}",
+        textposition="inside",
+        hovertemplate="<b>%{y}</b><br>%{customdata[0]}<extra></extra>",
+    )
     figure.update_layout(showlegend=False)
     return apply_chart_layout(figure)
 
@@ -1414,6 +1481,316 @@ def build_ml_outputs(
     )
 
 
+def build_dashboard_header() -> html.Header:
+    """Build the dashboard title and introduction."""
+    return html.Header(
+        [
+            html.H1(
+                "Learning Analytics Intelligence Platform",
+                style={"margin": 0, "fontSize": "1.8rem"},
+            ),
+            html.P(
+                "OULAD dashboard powered by DuckDB and dbt marts.",
+                style={
+                    "margin": "0.35rem 0 0",
+                    "color": DASHBOARD_COLORS["muted"],
+                },
+            ),
+        ],
+        style={"marginBottom": "1.5rem"},
+    )
+
+
+def build_global_filters(
+    module_dropdown_options: list[dict[str, str]],
+    initial_module_value: str | None,
+) -> html.Section:
+    """Build global module and presentation filters used by every tab."""
+    return html.Section(
+        [
+            section_header(
+                "Course Filters",
+                "Filter the dashboard by module and presentation. The selected "
+                "scope applies across every tab where the data is available.",
+            ),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Label("Module", htmlFor="module-dropdown"),
+                            dcc.Dropdown(
+                                id="module-dropdown",
+                                options=module_dropdown_options,
+                                value=initial_module_value,
+                                clearable=True,
+                                placeholder="Select module",
+                            ),
+                        ]
+                    ),
+                    html.Div(
+                        [
+                            html.Label(
+                                "Presentation",
+                                htmlFor="presentation-dropdown",
+                            ),
+                            dcc.Dropdown(
+                                id="presentation-dropdown",
+                                clearable=True,
+                                placeholder="Select presentation",
+                            ),
+                        ]
+                    ),
+                ],
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(auto-fit, minmax(240px, 1fr))",
+                    "gap": "1rem",
+                    "marginBottom": "1rem",
+                },
+            ),
+        ],
+        style=SECTION_STYLE,
+    )
+
+
+def build_overview_tab() -> html.Div:
+    """Build the Overview tab layout."""
+    return html.Div(
+        [
+            html.Section(
+                [
+                    section_header(
+                        "Overview",
+                        "Review the core enrollment, outcome, and high-risk KPIs "
+                        "for the selected cohort.",
+                    ),
+                    html.Div(
+                        id="kpi-cards",
+                        style={
+                            "display": "grid",
+                            "gridTemplateColumns": (
+                                "repeat(auto-fit, minmax(180px, 1fr))"
+                            ),
+                            "gap": "1rem",
+                        },
+                    ),
+                ],
+                style=SECTION_STYLE,
+            ),
+            html.Section(
+                [
+                    section_header(
+                        "Outcome Distribution",
+                        "Summarize final outcomes for the selected cohort.",
+                    ),
+                    dcc.Graph(id="final-result-distribution"),
+                ],
+                style=SECTION_STYLE,
+            ),
+            html.Section(
+                [
+                    section_header(
+                        "Learning Journey Funnel",
+                        "Summarize how the selected cohort moves from enrollment "
+                        "through activity, assessment submission, and successful "
+                        "outcome.",
+                    ),
+                    dcc.Graph(id="learning-journey-funnel"),
+                ],
+                style=SECTION_STYLE,
+            ),
+        ]
+    )
+
+
+def build_engagement_assessment_tab() -> html.Div:
+    """Build the Engagement & Assessment tab layout."""
+    return html.Div(
+        [
+            html.Section(
+                [
+                    section_header(
+                        "Engagement & Assessment Trends",
+                        "Track course activity, active learners, and assessment "
+                        "performance using dashboard-ready mart tables.",
+                    ),
+                    html.Div(
+                        [
+                            dcc.Graph(id="clicks-over-time"),
+                            dcc.Graph(id="active-students-over-time"),
+                            dcc.Graph(id="assessment-score-by-type"),
+                        ],
+                        style=GRAPH_GRID_STYLE,
+                    ),
+                ],
+                style=SECTION_STYLE,
+            ),
+        ]
+    )
+
+
+def build_student_success_tab() -> html.Div:
+    """Build the Student Success Signals tab layout."""
+    return html.Div(
+        [
+            html.Section(
+                [
+                    section_header(
+                        "Student Success Signals",
+                        "Compare rule-based student-success signals against "
+                        "withdrawal and assessment outcomes for the selected cohort.",
+                    ),
+                    html.Ul(
+                        [
+                            html.Li(
+                                "Risk bands are descriptive rule-based indicators, "
+                                "not ML predictions."
+                            ),
+                            html.Li(
+                                "These indicators are not predictive model outputs."
+                            ),
+                            html.Li("Student identifiers are anonymized OULAD IDs."),
+                            html.Li(
+                                "Declining engagement is measured within each "
+                                "student's observed activity window."
+                            ),
+                        ],
+                        style={
+                            "color": DASHBOARD_COLORS["muted"],
+                            "lineHeight": "1.45",
+                            "marginTop": 0,
+                        },
+                    ),
+                    html.Div(
+                        [
+                            dcc.Graph(id="risk-band-distribution"),
+                            dcc.Graph(id="withdrawal-rate-by-risk-band"),
+                            dcc.Graph(id="withdrawal-rate-by-declining-engagement"),
+                            dcc.Graph(id="average-score-by-low-engagement"),
+                        ],
+                        style=GRAPH_GRID_STYLE,
+                    ),
+                ],
+                style=SECTION_STYLE,
+            ),
+            html.Section(
+                [
+                    section_header(
+                        "Highest-Risk Student-Module Attempts",
+                        "The table shows up to 50 anonymized student-module "
+                        "attempts with the strongest combination of rule-based "
+                        "risk signals.",
+                    ),
+                    html.Div(
+                        id="student-risk-table",
+                        style={
+                            "border": f"1px solid {DASHBOARD_COLORS['border']}",
+                            "borderRadius": "8px",
+                            "backgroundColor": DASHBOARD_COLORS["surface"],
+                        },
+                    ),
+                ],
+                style=SECTION_STYLE,
+            ),
+        ]
+    )
+
+
+def build_ml_withdrawal_risk_tab() -> html.Div:
+    """Build the ML Withdrawal Risk tab layout."""
+    return html.Div(
+        [
+            html.Section(
+                [
+                    section_header(
+                        "Machine Learning: Day-30 Withdrawal Risk",
+                        "Review descriptive, dashboard-ready ML outputs read from "
+                        "DuckDB serving tables.",
+                    ),
+                    html.Ul(
+                        [
+                            html.Li(
+                                "Model setup: Logistic Regression baseline and "
+                                "Random Forest (RandomForestClassifier) challenger."
+                            ),
+                            html.Li("Selected model: selected by held-out ROC AUC."),
+                            html.Li("Prediction point: course day 30."),
+                            html.Li("Target: withdrawal after day 30."),
+                            html.Li(
+                                "Prediction population: students still enrolled "
+                                "after day 30."
+                            ),
+                            html.Li(
+                                "Features: only information available up to day 30."
+                            ),
+                            html.Li(
+                                "Dash displays precomputed outputs and does not "
+                                "train the model."
+                            ),
+                        ],
+                        style={
+                            "color": DASHBOARD_COLORS["muted"],
+                            "lineHeight": "1.45",
+                            "marginTop": 0,
+                        },
+                    ),
+                    html.Div(id="ml-serving-status"),
+                    html.Div(
+                        id="ml-kpi-cards",
+                        style={
+                            "display": "grid",
+                            "gridTemplateColumns": (
+                                "repeat(auto-fit, minmax(180px, 1fr))"
+                            ),
+                            "gap": "1rem",
+                            "marginBottom": "1rem",
+                        },
+                    ),
+                    html.Div(
+                        id="ml-model-comparison-table",
+                        style={
+                            "border": f"1px solid {DASHBOARD_COLORS['border']}",
+                            "borderRadius": "8px",
+                            "backgroundColor": DASHBOARD_COLORS["surface"],
+                            "marginBottom": "1rem",
+                        },
+                    ),
+                    html.Div(
+                        [
+                            dcc.Graph(id="ml-risk-band-distribution"),
+                            dcc.Graph(id="ml-withdrawal-rate-by-risk-band"),
+                            dcc.Graph(id="ml-feature-importance"),
+                        ],
+                        style=GRAPH_GRID_STYLE,
+                    ),
+                    html.Div(
+                        [
+                            html.H3(
+                                "Highest Predicted-Risk Student-Module Attempts",
+                                style={
+                                    "fontSize": "1.05rem",
+                                    "margin": "1rem 0 0.75rem",
+                                },
+                            ),
+                            html.Div(
+                                id="ml-highest-risk-table",
+                                style={
+                                    "border": (
+                                        f"1px solid {DASHBOARD_COLORS['border']}"
+                                    ),
+                                    "borderRadius": "8px",
+                                    "backgroundColor": DASHBOARD_COLORS["surface"],
+                                },
+                            ),
+                        ]
+                    ),
+                ],
+                style=SECTION_STYLE,
+            ),
+        ]
+    )
+
+
 DATA = load_dashboard_data()
 ML_DATA = load_ml_outputs()
 
@@ -1425,240 +1802,33 @@ initial_module = module_options[0]["value"] if module_options else None
 
 app.layout = html.Div(
     [
-        html.Header(
-            [
-                html.H1(
-                    "Learning Analytics Intelligence Platform",
-                    style={"margin": 0, "fontSize": "1.8rem"},
+        build_dashboard_header(),
+        build_global_filters(module_options, initial_module),
+        dcc.Tabs(
+            id="dashboard-tabs",
+            value="overview",
+            children=[
+                dcc.Tab(
+                    label="Overview",
+                    value="overview",
+                    children=build_overview_tab(),
                 ),
-                html.P(
-                    "OULAD dashboard powered by DuckDB and dbt marts.",
-                    style={
-                        "margin": "0.35rem 0 0",
-                        "color": DASHBOARD_COLORS["muted"],
-                    },
+                dcc.Tab(
+                    label="Engagement & Assessment",
+                    value="engagement-assessment",
+                    children=build_engagement_assessment_tab(),
                 ),
-            ],
-            style={"marginBottom": "1.5rem"},
-        ),
-        html.Section(
-            [
-                section_header(
-                    "Course Overview",
-                    "Filter the dashboard by module and presentation, then review "
-                    "the core enrollment, outcome, engagement, and high-risk KPIs.",
+                dcc.Tab(
+                    label="Student Success Signals",
+                    value="student-success-signals",
+                    children=build_student_success_tab(),
                 ),
-                html.Div(
-                    [
-                        html.Div(
-                            [
-                                html.Label("Module", htmlFor="module-dropdown"),
-                                dcc.Dropdown(
-                                    id="module-dropdown",
-                                    options=module_options,
-                                    value=initial_module,
-                                    clearable=True,
-                                    placeholder="Select module",
-                                ),
-                            ]
-                        ),
-                        html.Div(
-                            [
-                                html.Label(
-                                    "Presentation",
-                                    htmlFor="presentation-dropdown",
-                                ),
-                                dcc.Dropdown(
-                                    id="presentation-dropdown",
-                                    clearable=True,
-                                    placeholder="Select presentation",
-                                ),
-                            ]
-                        ),
-                    ],
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(240px, 1fr))",
-                        "gap": "1rem",
-                        "marginBottom": "1rem",
-                    },
-                ),
-                html.Div(
-                    id="kpi-cards",
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(180px, 1fr))",
-                        "gap": "1rem",
-                    },
+                dcc.Tab(
+                    label="ML Withdrawal Risk",
+                    value="ml-withdrawal-risk",
+                    children=build_ml_withdrawal_risk_tab(),
                 ),
             ],
-            style=SECTION_STYLE,
-        ),
-        html.Section(
-            [
-                section_header(
-                    "Engagement & Assessment Trends",
-                    "Track course activity, active learners, outcomes, and "
-                    "assessment performance using dashboard-ready mart tables.",
-                ),
-                html.Div(
-                    [
-                        dcc.Graph(id="clicks-over-time"),
-                        dcc.Graph(id="active-students-over-time"),
-                        dcc.Graph(id="final-result-distribution"),
-                        dcc.Graph(id="assessment-score-by-type"),
-                    ],
-                    style=GRAPH_GRID_STYLE,
-                ),
-            ],
-            style=SECTION_STYLE,
-        ),
-        html.Section(
-            [
-                section_header(
-                    "Learning Journey Funnel",
-                    "Summarize how the selected cohort moves from enrollment "
-                    "through activity, assessment submission, and successful outcome.",
-                ),
-                dcc.Graph(id="learning-journey-funnel"),
-            ],
-            style=SECTION_STYLE,
-        ),
-        html.Section(
-            [
-                section_header(
-                    "Student Success Signals",
-                    "Compare rule-based student-success signals against withdrawal "
-                    "and assessment outcomes for the selected cohort.",
-                ),
-                html.Ul(
-                    [
-                        html.Li(
-                            "Risk bands are rule-based analytical indicators, "
-                            "not validated predictive ML predictions."
-                        ),
-                        html.Li("Student identifiers are anonymized OULAD IDs."),
-                        html.Li(
-                            "Declining engagement is measured within each student's "
-                            "observed activity window."
-                        ),
-                    ],
-                    style={
-                        "color": DASHBOARD_COLORS["muted"],
-                        "lineHeight": "1.45",
-                        "marginTop": 0,
-                    },
-                ),
-                html.Div(
-                    [
-                        dcc.Graph(id="withdrawal-rate-by-declining-engagement"),
-                        dcc.Graph(id="average-score-by-low-engagement"),
-                        dcc.Graph(id="risk-band-distribution"),
-                        dcc.Graph(id="withdrawal-rate-by-risk-band"),
-                    ],
-                    style=GRAPH_GRID_STYLE,
-                ),
-            ],
-            style=SECTION_STYLE,
-        ),
-        html.Section(
-            [
-                section_header(
-                    "Highest-Risk Student-Module Attempts",
-                    "The table shows up to 50 anonymized student-module attempts "
-                    "with the strongest combination of rule-based risk signals.",
-                ),
-                html.Div(
-                    id="student-risk-table",
-                    style={
-                        "border": f"1px solid {DASHBOARD_COLORS['border']}",
-                        "borderRadius": "8px",
-                        "backgroundColor": DASHBOARD_COLORS["surface"],
-                    },
-                ),
-            ],
-            style=SECTION_STYLE,
-        ),
-        html.Section(
-            [
-                section_header(
-                    "Machine Learning: Day-30 Withdrawal Risk",
-                    "Review descriptive, dashboard-ready ML outputs read from "
-                    "DuckDB serving tables.",
-                ),
-                html.Ul(
-                    [
-                        html.Li(
-                            "Model setup: Logistic Regression baseline and "
-                            "Random Forest (RandomForestClassifier) challenger."
-                        ),
-                        html.Li("Selected model: selected by held-out ROC AUC."),
-                        html.Li("Prediction point: course day 30."),
-                        html.Li("Target: withdrawal after day 30."),
-                        html.Li(
-                            "Prediction population: students still enrolled "
-                            "after day 30."
-                        ),
-                        html.Li("Features: only information available up to day 30."),
-                        html.Li(
-                            "Dash displays precomputed outputs and does not "
-                            "train the model."
-                        ),
-                    ],
-                    style={
-                        "color": DASHBOARD_COLORS["muted"],
-                        "lineHeight": "1.45",
-                        "marginTop": 0,
-                    },
-                ),
-                html.Div(id="ml-serving-status"),
-                html.Div(
-                    id="ml-kpi-cards",
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(180px, 1fr))",
-                        "gap": "1rem",
-                        "marginBottom": "1rem",
-                    },
-                ),
-                html.Div(
-                    id="ml-model-comparison-table",
-                    style={
-                        "border": f"1px solid {DASHBOARD_COLORS['border']}",
-                        "borderRadius": "8px",
-                        "backgroundColor": DASHBOARD_COLORS["surface"],
-                        "marginBottom": "1rem",
-                    },
-                ),
-                html.Div(
-                    [
-                        dcc.Graph(id="ml-risk-band-distribution"),
-                        dcc.Graph(id="ml-withdrawal-rate-by-risk-band"),
-                        dcc.Graph(id="ml-feature-importance"),
-                    ],
-                    style=GRAPH_GRID_STYLE,
-                ),
-                html.Div(
-                    [
-                        html.H3(
-                            "Highest Predicted-Risk Student-Module Attempts",
-                            style={
-                                "fontSize": "1.05rem",
-                                "margin": "1rem 0 0.75rem",
-                            },
-                        ),
-                        html.Div(
-                            id="ml-highest-risk-table",
-                            style={
-                                "border": f"1px solid {DASHBOARD_COLORS['border']}",
-                                "borderRadius": "8px",
-                                "backgroundColor": DASHBOARD_COLORS["surface"],
-                            },
-                        ),
-                    ]
-                ),
-            ],
-            style=SECTION_STYLE,
         ),
     ],
     style={
