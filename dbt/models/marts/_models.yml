@@ -355,3 +355,112 @@ models:
           - accepted_values:
               arguments:
                 values: ["Low", "Medium", "High"]
+
+  - name: mart_withdrawal_prediction_features
+    description: Leakage-aware feature mart for a future withdrawal prediction model at course day 30. One row represents an eligible student-module attempt that was still enrolled after day 30, with target and features limited to information available on or before the prediction day.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier retained for training joins and evaluation splits; future model training should exclude it from feature columns.
+        data_tests:
+          - not_null
+      - name: prediction_day
+        description: Course-relative prediction day for the feature snapshot.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [30]
+                quote: false
+      - name: withdraw_after_day_30
+        description: Target flag indicating whether the student withdrew after day 30.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: gender
+        description: Student gender category.
+      - name: region
+        description: Student region.
+      - name: highest_education
+        description: Highest education level reported for the student.
+      - name: imd_band
+        description: Index of Multiple Deprivation band, where available.
+      - name: age_band
+        description: Student age band.
+      - name: num_of_prev_attempts
+        description: Number of previous attempts for the module.
+      - name: studied_credits
+        description: Number of credits studied by the student.
+      - name: disability
+        description: Student disability indicator.
+      - name: date_registration
+        description: Registration date relative to the presentation start.
+      - name: registered_before_course_start
+        description: Boolean flag indicating whether registration occurred before course day 0.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: registration_to_prediction_days
+        description: Days between registration and the day 30 prediction point.
+      - name: early_total_clicks
+        description: Total VLE clicks observed on or before day 30.
+        data_tests:
+          - not_null
+      - name: early_active_days
+        description: Count of distinct VLE activity days observed on or before day 30.
+        data_tests:
+          - not_null
+      - name: early_distinct_sites
+        description: Count of distinct VLE sites accessed on or before day 30.
+        data_tests:
+          - not_null
+      - name: early_distinct_activity_types
+        description: Count of distinct VLE activity types accessed on or before day 30.
+        data_tests:
+          - not_null
+      - name: early_clicks_per_active_day
+        description: Average clicks per active VLE day on or before day 30.
+        data_tests:
+          - not_null
+      - name: had_early_vle_activity
+        description: Boolean flag indicating whether the student had any VLE activity on or before day 30.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: early_submitted_assessments
+        description: Count of assessment submissions made on or before day 30.
+        data_tests:
+          - not_null
+      - name: early_average_score
+        description: Average score for assessment submissions made on or before day 30; null when no early assessment exists.
+      - name: early_weighted_score
+        description: Sum of weighted assessment scores for submissions made on or before day 30.
+        data_tests:
+          - not_null
+      - name: early_late_submissions
+        description: Count of early assessment submissions submitted after their assessment due date.
+        data_tests:
+          - not_null
+      - name: had_early_assessment
+        description: Boolean flag indicating whether the student submitted any assessment on or before day 30.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
