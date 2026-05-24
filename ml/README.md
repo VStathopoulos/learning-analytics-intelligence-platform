@@ -36,6 +36,9 @@ The selected model is chosen by held-out ROC AUC. If held-out ROC AUC ties,
 Logistic Regression is preferred for interpretability. If held-out ROC AUC is
 null for a model, that model is ranked last.
 
+The script also writes held-out ROC and Precision-Recall curve outputs for the
+selected model. These curves are computed on the held-out test split only.
+
 ## Runtime Outputs
 
 The training script writes dashboard-ready runtime files:
@@ -44,6 +47,8 @@ The training script writes dashboard-ready runtime files:
 - `data/processed/ml_withdrawal_metrics.json`
 - `data/processed/ml_withdrawal_feature_importance.csv`
 - `data/processed/ml_withdrawal_model_comparison.csv`
+- `data/processed/ml_withdrawal_roc_curve.csv`
+- `data/processed/ml_withdrawal_pr_curve.csv`
 
 These outputs are generated artifacts and should not be committed.
 
@@ -56,9 +61,12 @@ in the local DuckDB warehouse:
 - `ml_withdrawal_metrics`
 - `ml_withdrawal_feature_importance`
 - `ml_withdrawal_model_comparison`
+- `ml_withdrawal_roc_curve`
+- `ml_withdrawal_pr_curve`
 
 The future dashboard should consume the DuckDB ML serving tables. Dash should
-not train models.
+not train models or compute ROC and Precision-Recall curves using scikit-learn
+inside Dash.
 
 ## Usage
 

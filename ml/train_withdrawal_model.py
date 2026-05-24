@@ -17,10 +17,13 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
+    roc_curve,
     roc_auc_score,
 )
 from sklearn.pipeline import Pipeline
@@ -40,6 +43,8 @@ SERVING_TABLES = {
     "metrics": "ml_withdrawal_metrics",
     "feature_importance": "ml_withdrawal_feature_importance",
     "model_comparison": "ml_withdrawal_model_comparison",
+    "roc_curve": "ml_withdrawal_roc_curve",
+    "pr_curve": "ml_withdrawal_pr_curve",
 }
 IDENTIFIER_COLUMNS = [
     "code_module",
@@ -81,11 +86,28 @@ FEATURE_IMPORTANCE_COLUMNS = [
     "abs_importance_value",
     "model_version",
 ]
+ROC_CURVE_COLUMNS = [
+    "model_type",
+    "model_version",
+    "split",
+    "threshold",
+    "false_positive_rate",
+    "true_positive_rate",
+]
+PR_CURVE_COLUMNS = [
+    "model_type",
+    "model_version",
+    "split",
+    "threshold",
+    "precision",
+    "recall",
+]
 MODEL_COMPARISON_COLUMNS = [
     "model_type",
     "model_version",
     "selected_model",
     "roc_auc",
+    "average_precision",
     "accuracy",
     "precision",
     "recall",
@@ -167,6 +189,16 @@ def parse_args() -> argparse.Namespace:
         "--model-comparison-output",
         default="data/processed/ml_withdrawal_model_comparison.csv",
         help="Path for held-out metric comparison across model candidates.",
+    )
+    parser.add_argument(
+        "--roc-curve-output",
+        default="data/processed/ml_withdrawal_roc_curve.csv",
+        help="Path for selected model held-out ROC curve points.",
+    )
+    parser.add_argument(
+        "--pr-curve-output",
+        default="data/processed/ml_withdrawal_pr_curve.csv",
+        help="Path for selected model held-out Precision-Recall curve points.",
     )
     return parser.parse_args()
 
@@ -401,6 +433,18 @@ def safe_roc_auc(
     return float(roc_auc_score(y_true, y_score)), None
 
 
+def safe_average_precision(
+    y_true: pd.Series, y_score: pd.Series
+) -> tuple[float | None, str | None]:
+    """Compute average precision when both target classes are present."""
+    if y_true.nunique() < 2:
+        return (
+            None,
+            "Average precision was not computed because the test split has one class.",
+        )
+    return float(average_precision_score(y_true, y_score)), None
+
+
 def build_metrics(
     spec: ModelSpec,
     y_train: pd.Series,
@@ -415,6 +459,12 @@ def build_metrics(
     roc_auc, roc_auc_warning = safe_roc_auc(y_test, y_probability)
     if roc_auc_warning:
         warnings.append(roc_auc_warning)
+    average_precision, average_precision_warning = safe_average_precision(
+        y_test,
+        y_probability,
+    )
+    if average_precision_warning:
+        warnings.append(average_precision_warning)
 
     true_negative, false_positive, false_negative, true_positive = confusion_matrix(
         y_test,
@@ -434,6 +484,7 @@ def build_metrics(
         "positive_rate_train": float(y_train.mean()),
         "positive_rate_test": float(y_test.mean()),
         "roc_auc": roc_auc,
+        "average_precision": average_precision,
         "accuracy": float(accuracy_score(y_test, y_pred)),
         "precision": float(precision_score(y_test, y_pred, zero_division=0)),
         "recall": float(recall_score(y_test, y_pred, zero_division=0)),
@@ -491,6 +542,8 @@ def fit_and_evaluate_model(
         "spec": spec,
         "model": model,
         "metrics": metrics,
+        "y_test": y_test,
+        "test_probabilities": test_probabilities,
         "all_probabilities": all_probabilities,
     }
 
@@ -619,6 +672,119 @@ def extract_feature_importance(
     ]
 
 
+def empty_roc_curve_frame() -> pd.DataFrame:
+    """Return an empty ROC curve frame with stable column dtypes."""
+    return pd.DataFrame(
+        {
+            "model_type": pd.Series(dtype="str"),
+            "model_version": pd.Series(dtype="str"),
+            "split": pd.Series(dtype="str"),
+            "threshold": pd.Series(dtype="float64"),
+            "false_positive_rate": pd.Series(dtype="float64"),
+            "true_positive_rate": pd.Series(dtype="float64"),
+        }
+    )
+
+
+def empty_pr_curve_frame() -> pd.DataFrame:
+    """Return an empty Precision-Recall curve frame with stable column dtypes."""
+    return pd.DataFrame(
+        {
+            "model_type": pd.Series(dtype="str"),
+            "model_version": pd.Series(dtype="str"),
+            "split": pd.Series(dtype="str"),
+            "threshold": pd.Series(dtype="float64"),
+            "precision": pd.Series(dtype="float64"),
+            "recall": pd.Series(dtype="float64"),
+        }
+    )
+
+
+def aligned_threshold_series(
+    thresholds,
+    curve_length: int,
+) -> pd.Series:
+    """Align sklearn thresholds to curve points and use nulls where absent."""
+    threshold_values = list(thresholds)
+    if len(threshold_values) < curve_length:
+        threshold_values.extend([None] * (curve_length - len(threshold_values)))
+    if len(threshold_values) > curve_length:
+        threshold_values = threshold_values[:curve_length]
+
+    threshold_series = pd.to_numeric(
+        pd.Series(threshold_values),
+        errors="coerce",
+    )
+    return threshold_series.mask(threshold_series.isin([float("inf"), float("-inf")]))
+
+
+def build_roc_curve(
+    spec: ModelSpec,
+    y_test: pd.Series,
+    y_probability: pd.Series,
+    warnings: list[str],
+) -> pd.DataFrame:
+    """Build selected-model ROC curve points on the held-out test split."""
+    if y_test.nunique() < 2:
+        warnings.append(
+            "ROC curve was not computed because the test split has one class."
+        )
+        return empty_roc_curve_frame()
+
+    false_positive_rate, true_positive_rate, thresholds = roc_curve(
+        y_test,
+        y_probability,
+    )
+    return pd.DataFrame(
+        {
+            "model_type": spec.model_type,
+            "model_version": spec.model_version,
+            "split": "test",
+            "threshold": aligned_threshold_series(
+                thresholds,
+                len(false_positive_rate),
+            ),
+            "false_positive_rate": false_positive_rate,
+            "true_positive_rate": true_positive_rate,
+        },
+        columns=ROC_CURVE_COLUMNS,
+    )
+
+
+def build_pr_curve(
+    spec: ModelSpec,
+    y_test: pd.Series,
+    y_probability: pd.Series,
+    warnings: list[str],
+) -> pd.DataFrame:
+    """Build selected-model Precision-Recall curve points on the test split."""
+    if y_test.nunique() < 2:
+        warnings.append(
+            "Precision-Recall curve was not computed because the test split has "
+            "one class."
+        )
+        return empty_pr_curve_frame()
+
+    precision_values, recall_values, thresholds = precision_recall_curve(
+        y_test,
+        y_probability,
+    )
+    return pd.DataFrame(
+        {
+            "model_type": spec.model_type,
+            "model_version": spec.model_version,
+            "split": "test",
+            "threshold": aligned_threshold_series(
+                thresholds,
+                len(precision_values),
+            ),
+            "precision": precision_values,
+            "recall": recall_values,
+        },
+        columns=PR_CURVE_COLUMNS,
+    )
+
+
 def build_model_comparison(
     results: list[dict],
     selected_result: dict,
@@ -651,21 +817,29 @@ def write_runtime_outputs(
     metrics: dict,
     feature_importance: pd.DataFrame,
     model_comparison: pd.DataFrame,
+    roc_curve_data: pd.DataFrame,
+    pr_curve_data: pd.DataFrame,
     predictions_output: Path,
     metrics_output: Path,
     feature_importance_output: Path,
     model_comparison_output: Path,
+    roc_curve_output: Path,
+    pr_curve_output: Path,
 ) -> None:
-    """Write local runtime prediction, metrics, and comparison artifacts."""
+    """Write local runtime prediction, metrics, comparison, and curve artifacts."""
     predictions_output.parent.mkdir(parents=True, exist_ok=True)
     metrics_output.parent.mkdir(parents=True, exist_ok=True)
     feature_importance_output.parent.mkdir(parents=True, exist_ok=True)
     model_comparison_output.parent.mkdir(parents=True, exist_ok=True)
+    roc_curve_output.parent.mkdir(parents=True, exist_ok=True)
+    pr_curve_output.parent.mkdir(parents=True, exist_ok=True)
 
     predictions.to_csv(predictions_output, index=False)
     metrics_output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     feature_importance.to_csv(feature_importance_output, index=False)
     model_comparison.to_csv(model_comparison_output, index=False)
+    roc_curve_data.to_csv(roc_curve_output, index=False)
+    pr_curve_data.to_csv(pr_curve_output, index=False)
 
 
 def write_duckdb_serving_tables(
@@ -674,6 +848,8 @@ def write_duckdb_serving_tables(
     metrics: dict,
     feature_importance: pd.DataFrame,
     model_comparison: pd.DataFrame,
+    roc_curve_data: pd.DataFrame,
+    pr_curve_data: pd.DataFrame,
 ) -> None:
     """Create or replace dashboard-ready ML serving tables in DuckDB."""
     frames_to_write = [
@@ -696,6 +872,16 @@ def write_duckdb_serving_tables(
             "ml_withdrawal_model_comparison_frame",
             SERVING_TABLES["model_comparison"],
             model_comparison,
+        ),
+        (
+            "ml_withdrawal_roc_curve_frame",
+            SERVING_TABLES["roc_curve"],
+            roc_curve_data,
+        ),
+        (
+            "ml_withdrawal_pr_curve_frame",
+            SERVING_TABLES["pr_curve"],
+            pr_curve_data,
         ),
     ]
 
@@ -723,6 +909,8 @@ def main() -> None:
         project_root,
         args.model_comparison_output,
     )
+    roc_curve_output = resolve_project_path(project_root, args.roc_curve_output)
+    pr_curve_output = resolve_project_path(project_root, args.pr_curve_output)
 
     data = load_feature_mart(duckdb_path)
     require_columns(data)
@@ -769,6 +957,18 @@ def main() -> None:
         spec=selected_spec,
         warnings=selected_metrics["warnings"],
     )
+    roc_curve_data = build_roc_curve(
+        spec=selected_spec,
+        y_test=selected_result["y_test"],
+        y_probability=selected_result["test_probabilities"],
+        warnings=selected_metrics["warnings"],
+    )
+    pr_curve_data = build_pr_curve(
+        spec=selected_spec,
+        y_test=selected_result["y_test"],
+        y_probability=selected_result["test_probabilities"],
+        warnings=selected_metrics["warnings"],
+    )
     predictions = build_predictions(
         data_frame=data,
         probabilities=selected_result["all_probabilities"],
@@ -785,10 +985,14 @@ def main() -> None:
         metrics=selected_metrics,
         feature_importance=feature_importance,
         model_comparison=model_comparison,
+        roc_curve_data=roc_curve_data,
+        pr_curve_data=pr_curve_data,
         predictions_output=predictions_output,
         metrics_output=metrics_output,
         feature_importance_output=feature_importance_output,
         model_comparison_output=model_comparison_output,
+        roc_curve_output=roc_curve_output,
+        pr_curve_output=pr_curve_output,
     )
     write_duckdb_serving_tables(
         duckdb_path=duckdb_path,
@@ -796,10 +1000,12 @@ def main() -> None:
         metrics=selected_metrics,
         feature_importance=feature_importance,
         model_comparison=model_comparison,
+        roc_curve_data=roc_curve_data,
+        pr_curve_data=pr_curve_data,
     )
     print(
         "Wrote withdrawal model predictions, metrics, feature importance, "
-        "model comparison, and DuckDB serving tables for "
+        "model comparison, held-out curves, and DuckDB serving tables for "
         f"{len(predictions):,} student-module attempts. Selected "
         f"{selected_spec.model_type}."
     )
