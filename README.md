@@ -29,11 +29,16 @@ approved mart tables rather than raw, staging, or intermediate data.
   assessment behavior, and rule-based risk indicators.
 - Rule-based risk segmentation for analytical monitoring.
 - Dashboard reads only approved dbt mart tables.
+- GitHub Actions CI for Python syntax, lint, formatting, and dbt parse checks.
+- Airflow DAG for local pipeline orchestration.
+- Airflow DAG tasks orchestrate raw validation, DuckDB loading, `dbt run`, and
+  `dbt test`.
 
 ## Architecture
 
 ```text
 OULAD raw CSVs
+-> Airflow DAG orchestration
 -> Python validation
 -> DuckDB raw tables
 -> dbt sources
@@ -43,6 +48,9 @@ OULAD raw CSVs
 -> Dash dashboard
 -> governed future LLM insight cards
 ```
+
+The Airflow DAG is implemented under `orchestration/dags/` and is intended for
+local/runtime orchestration of the existing pipeline steps.
 
 The governed LLM insight card layer is planned future work and is not currently
 implemented.
@@ -163,6 +171,15 @@ Then open:
 http://127.0.0.1:8050/
 ```
 
+### Optional Airflow Orchestration
+
+The repository includes an Airflow DAG at
+`orchestration/dags/laip_pipeline_dag.py`. The DAG orchestrates raw validation,
+DuckDB loading, `dbt run`, and `dbt test`.
+
+Airflow is not installed in the main Conda environment yet. To use the DAG, an
+Airflow runtime should set `LAIP_PROJECT_ROOT` to the project root.
+
 ## Repository Hygiene
 
 - Raw CSV files are ignored.
@@ -170,6 +187,9 @@ http://127.0.0.1:8050/
 - dbt `target/` and `logs/` artifacts are ignored.
 - `.env` files are ignored.
 - Only code, configuration, and documentation are committed.
+- GitHub Actions CI runs syntax, lint, formatting, and dbt parse checks.
+- CI intentionally does not run ingestion, `dbt run`, `dbt test`, or the
+  dashboard because raw data and DuckDB warehouse files are ignored.
 
 ## LLM Insight Governance
 
@@ -183,12 +203,17 @@ must not be passed to the LLM.
 - Risk bands are rule-based analytical indicators, not validated predictive ML
   outputs.
 - The application is not deployed yet.
-- Airflow orchestration is planned but not implemented yet.
+- Airflow DAG exists, but full Airflow runtime setup is not included in the main
+  Conda environment yet.
+- Governed LLM insight cards are planned but not implemented yet.
+- Leakage-aware ML withdrawal/dropout prediction is planned but not implemented
+  yet.
 - Screenshots still need to be added.
-- Future work may include CI, an Airflow DAG, and governed LLM insight cards.
+- Future work may include deployment, full Airflow runtime setup, governed LLM
+  insight cards, and leakage-aware ML modeling.
 
 ## Suggested Portfolio Positioning
 
 This project demonstrates analytics engineering, dbt modeling, BI dashboarding,
-data quality testing, learning analytics, and responsible design for
-AI-assisted insight generation.
+data quality testing, CI, Airflow orchestration, learning analytics, and
+responsible design for future AI-assisted insight generation.
