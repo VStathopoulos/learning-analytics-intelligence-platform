@@ -91,6 +91,10 @@ The Dash dashboard reads from approved dbt mart tables in DuckDB and includes:
 - Low engagement vs average score.
 - Highest-risk anonymized student-module attempts table.
 
+The dashboard is organized into Course Overview, Engagement & Assessment
+Trends, Learning Journey Funnel, Student Success Signals, and Highest-Risk
+Student-Module Attempts sections.
+
 The dashboard directly supports these student-success questions:
 
 - Did students with declining engagement have higher withdrawal rates?
@@ -99,7 +103,27 @@ The dashboard directly supports these student-success questions:
 
 ## Screenshots
 
-Screenshots will be added after the dashboard layout is finalized.
+### Dashboard Overview
+
+The overview shows module/presentation filtering, course-level KPIs, and the
+main engagement and assessment monitoring layout.
+
+![Dashboard overview](docs/images/dashboard-overview.png)
+
+### Learning Journey Funnel
+
+The funnel summarizes how the selected cohort moves from enrollment to VLE
+activity, assessment submission, and successful outcome.
+
+![Learning journey funnel](docs/images/learning-journey-funnel.png)
+
+### Student Success Signals
+
+The student-success section shows rule-based risk segmentation, withdrawal-rate
+comparisons, engagement/score patterns, and the highest-risk anonymized
+student-module attempts.
+
+![Student success signals](docs/images/student-success-signals.png)
 
 ## How To Run Locally
 
