@@ -18,6 +18,12 @@ MART_TABLES = {
     "assessment_performance": "fct_assessment_performance",
     "student_success_features": "mart_student_success_features",
 }
+ML_TABLES = {
+    "predictions": "ml_withdrawal_predictions",
+    "metrics": "ml_withdrawal_metrics",
+    "feature_importance": "ml_withdrawal_feature_importance",
+    "model_comparison": "ml_withdrawal_model_comparison",
+}
 
 EXPECTED_COLUMNS = {
     "student_module": [
@@ -56,6 +62,49 @@ EXPECTED_COLUMNS = {
         "submitted_assessments",
         "average_submission_delay_days",
         "is_low_engagement",
+    ],
+}
+EXPECTED_ML_COLUMNS = {
+    "predictions": [
+        "code_module",
+        "code_presentation",
+        "id_student",
+        "prediction_day",
+        "split",
+        "withdraw_after_day_30",
+        "predicted_withdrawal_probability",
+        "predicted_risk_band",
+        "model_version",
+    ],
+    "metrics": [
+        "selected_model",
+        "selection_reason",
+        "model_type",
+        "model_version",
+        "roc_auc",
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "test_rows",
+        "positive_rate_test",
+    ],
+    "feature_importance": [
+        "feature",
+        "importance_type",
+        "importance_value",
+        "abs_importance_value",
+        "model_version",
+    ],
+    "model_comparison": [
+        "model_type",
+        "model_version",
+        "selected_model",
+        "roc_auc",
+        "precision",
+        "recall",
+        "f1",
+        "accuracy",
     ],
 }
 
@@ -100,6 +149,27 @@ STUDENT_RISK_COLUMNS = [
     "submitted_assessments",
     "average_submission_delay_days",
 ]
+ML_MODEL_COMPARISON_COLUMNS = [
+    "model_type",
+    "model_version",
+    "selected_model",
+    "roc_auc",
+    "precision",
+    "recall",
+    "f1",
+    "accuracy",
+]
+ML_HIGHEST_RISK_COLUMNS = [
+    "code_module",
+    "code_presentation",
+    "id_student",
+    "prediction_day",
+    "split",
+    "withdraw_after_day_30",
+    "predicted_withdrawal_probability",
+    "predicted_risk_band",
+    "model_version",
+]
 GRAPH_GRID_STYLE = {
     "display": "grid",
     "gridTemplateColumns": "repeat(auto-fit, minmax(360px, 1fr))",
@@ -125,6 +195,57 @@ def load_mart_table(table_key: str) -> pd.DataFrame:
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
     """Load all dashboard data from approved dbt mart tables."""
     return {table_key: load_mart_table(table_key) for table_key in MART_TABLES}
+
+
+def table_exists(connection, table_name: str) -> bool:
+    """Check whether a DuckDB table is available for dashboard reads."""
+    result = connection.execute(
+        """
+        select count(*)
+        from information_schema.tables
+        where lower(table_name) = lower(?)
+        """,
+        [table_name],
+    ).fetchone()
+    return bool(result and result[0])
+
+
+def load_ml_outputs() -> dict:
+    """Load precomputed ML serving tables from the local DuckDB warehouse."""
+    outputs = {
+        table_key: pd.DataFrame(columns=EXPECTED_ML_COLUMNS[table_key])
+        for table_key in ML_TABLES
+    }
+    missing_tables = []
+
+    if not WAREHOUSE_PATH.exists():
+        return {
+            "tables": outputs,
+            "missing_tables": list(ML_TABLES.values()),
+            "load_error": "",
+        }
+
+    try:
+        with duckdb.connect(str(WAREHOUSE_PATH), read_only=True) as connection:
+            for table_key, table_name in ML_TABLES.items():
+                if not table_exists(connection, table_name):
+                    missing_tables.append(table_name)
+                    continue
+                outputs[table_key] = connection.execute(
+                    f"select * from {table_name}"
+                ).fetchdf()
+    except duckdb.Error as exc:
+        return {
+            "tables": outputs,
+            "missing_tables": list(ML_TABLES.values()),
+            "load_error": str(exc),
+        }
+
+    return {
+        "tables": outputs,
+        "missing_tables": missing_tables,
+        "load_error": "",
+    }
 
 
 def filter_by_scope(
@@ -239,6 +360,22 @@ def format_decimal(value: float | None) -> str:
     if value is None or pd.isna(value):
         return "N/A"
     return f"{value:.1f}"
+
+
+def format_metric(value, metric_type: str = "decimal") -> str:
+    """Format ML metrics for dashboard KPI cards and tables."""
+    if value is None or pd.isna(value):
+        return "N/A"
+
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric_value):
+        return "N/A"
+
+    if metric_type == "integer":
+        return f"{numeric_value:,.0f}"
+    if metric_type == "rate":
+        return f"{numeric_value * 100:.1f}%"
+    return f"{numeric_value:.3f}"
 
 
 def normalize_bool_value(value):
@@ -834,7 +971,451 @@ def build_student_risk_table(success_features: pd.DataFrame):
     )
 
 
+def selected_metric_row(metrics: pd.DataFrame) -> dict:
+    """Return the selected model metrics row when available."""
+    if metrics.empty:
+        return {}
+
+    if "selected_model" in metrics.columns:
+        selected_mask = (
+            metrics["selected_model"]
+            .map(normalize_bool_value)
+            .fillna(False)
+            .astype(bool)
+        )
+        if selected_mask.any():
+            return metrics[selected_mask].iloc[0].to_dict()
+
+    return metrics.iloc[0].to_dict()
+
+
+def missing_ml_tables_message(missing_tables: list[str], load_error: str = ""):
+    """Render a clear message when ML serving tables are not available."""
+    missing_text = ", ".join(missing_tables)
+    details = f" Missing tables: {missing_text}." if missing_text else ""
+    error_text = f" DuckDB read error: {load_error}" if load_error else ""
+    return html.Div(
+        [
+            html.Strong("Machine Learning outputs are not available yet."),
+            html.Div(
+                [
+                    "Run ",
+                    html.Code("python ml/train_withdrawal_model.py"),
+                    " to create the dashboard-ready ML serving tables.",
+                    details,
+                    error_text,
+                ],
+                style={"marginTop": "0.35rem"},
+            ),
+        ],
+        style={
+            "border": f"1px solid {DASHBOARD_COLORS['border']}",
+            "borderRadius": "8px",
+            "backgroundColor": DASHBOARD_COLORS["surface"],
+            "color": DASHBOARD_COLORS["muted"],
+            "padding": "1rem",
+            "marginBottom": "1rem",
+        },
+    )
+
+
+def build_ml_status(metrics: pd.DataFrame):
+    """Render selected-model context from the metrics serving table."""
+    metric_row = selected_metric_row(metrics)
+    if not metric_row:
+        return html.Div(
+            "No selected-model metrics are available in ml_withdrawal_metrics.",
+            style={"color": DASHBOARD_COLORS["muted"], "marginBottom": "1rem"},
+        )
+
+    model_type = metric_row.get("model_type", "N/A")
+    model_version = metric_row.get("model_version", "N/A")
+    selection_reason = metric_row.get(
+        "selection_reason",
+        "Selected model is chosen by held-out ROC AUC.",
+    )
+    return html.Div(
+        [
+            html.Strong(f"Selected model: {model_type}"),
+            html.Span(f" ({model_version})"),
+            html.Div(
+                selection_reason,
+                style={"marginTop": "0.35rem", "color": DASHBOARD_COLORS["muted"]},
+            ),
+        ],
+        style={"marginBottom": "1rem"},
+    )
+
+
+def build_ml_kpi_cards(metrics: pd.DataFrame):
+    """Build KPI cards from selected-model held-out metrics."""
+    metric_row = selected_metric_row(metrics)
+    if not metric_row:
+        return [
+            html.Div(
+                "No ML metrics are available.",
+                style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+            )
+        ]
+
+    kpis = [
+        ("Held-out ROC AUC", format_metric(metric_row.get("roc_auc"))),
+        ("Held-out Recall", format_metric(metric_row.get("recall"), "rate")),
+        ("Held-out Precision", format_metric(metric_row.get("precision"), "rate")),
+        ("Held-out F1", format_metric(metric_row.get("f1"), "rate")),
+        ("Test Rows", format_metric(metric_row.get("test_rows"), "integer")),
+        (
+            "Test Future-Withdrawal Rate",
+            format_metric(metric_row.get("positive_rate_test"), "rate"),
+        ),
+    ]
+    return [kpi_card(label, value) for label, value in kpis]
+
+
+def build_ml_model_comparison_table(model_comparison: pd.DataFrame):
+    """Build the model comparison table for baseline and challenger models."""
+    if model_comparison.empty:
+        return html.Div(
+            "No model comparison data available.",
+            style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+        )
+
+    missing_columns = [
+        column
+        for column in ML_MODEL_COMPARISON_COLUMNS
+        if column not in model_comparison.columns
+    ]
+    if missing_columns:
+        return html.Div(
+            "ML model comparison table is missing expected columns.",
+            style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+        )
+
+    display_data = model_comparison[ML_MODEL_COMPARISON_COLUMNS].copy()
+    for column in ["roc_auc", "precision", "recall", "f1", "accuracy"]:
+        display_data[column] = pd.to_numeric(
+            display_data[column],
+            errors="coerce",
+        ).round(3)
+    display_data["selected_model"] = display_data["selected_model"].map(
+        format_bool_label
+    )
+    display_data = display_data.where(pd.notna(display_data), None)
+
+    table_columns = [
+        {"name": "Model Type", "id": "model_type"},
+        {"name": "Model Version", "id": "model_version"},
+        {"name": "Selected Model", "id": "selected_model"},
+        {"name": "ROC AUC", "id": "roc_auc"},
+        {"name": "Precision", "id": "precision"},
+        {"name": "Recall", "id": "recall"},
+        {"name": "F1", "id": "f1"},
+        {"name": "Accuracy", "id": "accuracy"},
+    ]
+
+    return dash_table.DataTable(
+        columns=table_columns,
+        data=display_data.to_dict("records"),
+        page_size=5,
+        sort_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "Arial, sans-serif",
+            "fontSize": "0.85rem",
+            "padding": "0.55rem",
+            "textAlign": "left",
+            "minWidth": "90px",
+        },
+        style_header={
+            "backgroundColor": "#f0f4f8",
+            "fontWeight": "700",
+            "border": f"1px solid {DASHBOARD_COLORS['border']}",
+        },
+        style_data={
+            "backgroundColor": DASHBOARD_COLORS["surface"],
+            "border": "1px solid #e4e7eb",
+        },
+        style_data_conditional=[
+            {
+                "if": {"filter_query": '{selected_model} = "Yes"'},
+                "backgroundColor": "#eff6ff",
+            },
+        ],
+    )
+
+
+def filter_ml_predictions(
+    predictions: pd.DataFrame,
+    code_module: str | None,
+    code_presentation: str | None,
+) -> pd.DataFrame:
+    """Filter ML predictions by dashboard scope and prefer the test split."""
+    filtered = filter_by_scope(predictions, code_module, code_presentation)
+    if filtered.empty or "split" not in filtered.columns:
+        return filtered
+
+    test_rows = filtered[filtered["split"].astype(str).str.lower() == "test"]
+    if not test_rows.empty:
+        return test_rows
+    return filtered
+
+
+def build_ml_risk_band_distribution_figure(predictions: pd.DataFrame):
+    """Build predicted withdrawal risk-band distribution from ML outputs."""
+    if predictions.empty or "predicted_risk_band" not in predictions.columns:
+        return empty_figure("No ML prediction risk-band data available")
+
+    chart_data = predictions.dropna(subset=["predicted_risk_band"]).copy()
+    if chart_data.empty:
+        return empty_figure("No ML prediction risk-band data available")
+
+    chart_data["predicted_risk_band"] = pd.Categorical(
+        chart_data["predicted_risk_band"],
+        categories=RISK_BAND_ORDER,
+        ordered=True,
+    )
+    chart_data = chart_data.dropna(subset=["predicted_risk_band"])
+    grouped = (
+        chart_data.groupby("predicted_risk_band", observed=True)
+        .size()
+        .reset_index(name="student_module_attempts")
+    )
+
+    figure = px.bar(
+        grouped,
+        x="predicted_risk_band",
+        y="student_module_attempts",
+        title="Predicted Risk-Band Distribution",
+        labels={
+            "predicted_risk_band": "Predicted Risk Band",
+            "student_module_attempts": "Student-Module Attempts",
+        },
+        category_orders={"predicted_risk_band": RISK_BAND_ORDER},
+        color="predicted_risk_band",
+        color_discrete_map=RISK_BAND_COLORS,
+    )
+    figure.update_layout(showlegend=False)
+    return apply_chart_layout(figure)
+
+
+def build_ml_withdrawal_rate_by_risk_band_figure(predictions: pd.DataFrame):
+    """Build actual future-withdrawal rate by predicted risk band."""
+    required_columns = {"predicted_risk_band", "withdraw_after_day_30"}
+    if predictions.empty or not required_columns.issubset(predictions.columns):
+        return empty_figure("No ML prediction outcome data available")
+
+    chart_data = predictions.dropna(subset=["predicted_risk_band"]).copy()
+    chart_data["predicted_risk_band"] = pd.Categorical(
+        chart_data["predicted_risk_band"],
+        categories=RISK_BAND_ORDER,
+        ordered=True,
+    )
+    chart_data["future_withdrawal"] = chart_data["withdraw_after_day_30"].map(
+        normalize_bool_value
+    )
+    chart_data = chart_data.dropna(subset=["predicted_risk_band", "future_withdrawal"])
+    if chart_data.empty:
+        return empty_figure("No ML prediction outcome data available")
+
+    chart_data["future_withdrawal"] = chart_data["future_withdrawal"].astype(bool)
+    grouped = (
+        chart_data.groupby("predicted_risk_band", observed=True)["future_withdrawal"]
+        .mean()
+        .reset_index(name="future_withdrawal_rate")
+    )
+    grouped["future_withdrawal_rate"] = grouped["future_withdrawal_rate"] * 100
+
+    figure = px.bar(
+        grouped,
+        x="predicted_risk_band",
+        y="future_withdrawal_rate",
+        title="Actual Withdrawal Rate by Predicted Risk Band",
+        labels={
+            "predicted_risk_band": "Predicted Risk Band",
+            "future_withdrawal_rate": "Withdrawal After Day 30 Rate",
+        },
+        category_orders={"predicted_risk_band": RISK_BAND_ORDER},
+        color="predicted_risk_band",
+        color_discrete_map=RISK_BAND_COLORS,
+    )
+    figure.update_layout(showlegend=False)
+    figure.update_yaxes(ticksuffix="%")
+    return apply_chart_layout(figure)
+
+
+def build_ml_feature_importance_figure(feature_importance: pd.DataFrame):
+    """Build selected-model feature importance chart."""
+    required_columns = {"feature", "abs_importance_value", "importance_value"}
+    if feature_importance.empty or not required_columns.issubset(
+        feature_importance.columns
+    ):
+        return empty_figure("No selected-model feature importance data available")
+
+    chart_data = feature_importance.copy()
+    chart_data["abs_importance_value"] = pd.to_numeric(
+        chart_data["abs_importance_value"],
+        errors="coerce",
+    )
+    chart_data["importance_value"] = pd.to_numeric(
+        chart_data["importance_value"],
+        errors="coerce",
+    )
+    chart_data = chart_data.dropna(subset=["feature", "abs_importance_value"])
+    if chart_data.empty:
+        return empty_figure("No selected-model feature importance data available")
+
+    chart_data = (
+        chart_data.sort_values("abs_importance_value", ascending=False)
+        .head(15)
+        .sort_values("abs_importance_value", ascending=True)
+    )
+    figure = px.bar(
+        chart_data,
+        x="abs_importance_value",
+        y="feature",
+        orientation="h",
+        title="Selected-Model Feature Importance",
+        labels={
+            "feature": "Feature",
+            "abs_importance_value": "Importance Magnitude",
+            "importance_value": "Importance Value",
+        },
+        hover_data=["importance_value"],
+        color_discrete_sequence=[DASHBOARD_COLORS["primary"]],
+    )
+    figure.update_layout(showlegend=False)
+    return apply_chart_layout(figure)
+
+
+def build_ml_highest_risk_table(predictions: pd.DataFrame):
+    """Build a table of the highest predicted-risk student-module attempts."""
+    if predictions.empty:
+        return html.Div(
+            "No ML predictions available for the selected scope.",
+            style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+        )
+
+    missing_columns = [
+        column for column in ML_HIGHEST_RISK_COLUMNS if column not in predictions
+    ]
+    if missing_columns:
+        return html.Div(
+            "ML predictions table is missing expected columns.",
+            style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+        )
+
+    table_data = predictions.copy()
+    table_data["_probability_sort"] = pd.to_numeric(
+        table_data["predicted_withdrawal_probability"],
+        errors="coerce",
+    ).fillna(-1)
+    table_data = table_data.sort_values(
+        "_probability_sort",
+        ascending=False,
+    ).head(50)
+
+    display_data = table_data[ML_HIGHEST_RISK_COLUMNS].copy()
+    display_data["predicted_withdrawal_probability"] = pd.to_numeric(
+        display_data["predicted_withdrawal_probability"],
+        errors="coerce",
+    ).round(4)
+    display_data["withdraw_after_day_30"] = display_data["withdraw_after_day_30"].map(
+        format_bool_label
+    )
+    display_data = display_data.where(pd.notna(display_data), None)
+
+    table_columns = [
+        {"name": "Module", "id": "code_module"},
+        {"name": "Presentation", "id": "code_presentation"},
+        {"name": "Anonymized Student ID", "id": "id_student"},
+        {"name": "Prediction Day", "id": "prediction_day"},
+        {"name": "Split", "id": "split"},
+        {"name": "Withdraw After Day 30", "id": "withdraw_after_day_30"},
+        {
+            "name": "Predicted Withdrawal Probability",
+            "id": "predicted_withdrawal_probability",
+        },
+        {"name": "Predicted Risk Band", "id": "predicted_risk_band"},
+        {"name": "Model Version", "id": "model_version"},
+    ]
+
+    return dash_table.DataTable(
+        columns=table_columns,
+        data=display_data.to_dict("records"),
+        page_size=10,
+        sort_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "Arial, sans-serif",
+            "fontSize": "0.85rem",
+            "padding": "0.55rem",
+            "textAlign": "left",
+            "minWidth": "90px",
+        },
+        style_header={
+            "backgroundColor": "#f0f4f8",
+            "fontWeight": "700",
+            "border": f"1px solid {DASHBOARD_COLORS['border']}",
+        },
+        style_data={
+            "backgroundColor": DASHBOARD_COLORS["surface"],
+            "border": "1px solid #e4e7eb",
+        },
+        style_data_conditional=[
+            {
+                "if": {"filter_query": '{predicted_risk_band} = "High"'},
+                "backgroundColor": "#fff5f5",
+            },
+        ],
+    )
+
+
+def build_ml_outputs(
+    ml_data: dict,
+    code_module: str | None,
+    code_presentation: str | None,
+):
+    """Build all ML dashboard outputs from precomputed serving tables."""
+    missing_tables = ml_data.get("missing_tables", [])
+    load_error = ml_data.get("load_error", "")
+    if missing_tables:
+        return (
+            missing_ml_tables_message(missing_tables, load_error),
+            [],
+            html.Div(
+                "Model comparison is unavailable until ML serving tables exist.",
+                style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+            ),
+            empty_figure("ML predictions are not available"),
+            empty_figure("ML prediction outcomes are not available"),
+            empty_figure("ML feature importance is not available"),
+            html.Div(
+                "Highest predicted-risk attempts are unavailable until ML "
+                "serving tables exist.",
+                style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
+            ),
+        )
+
+    tables = ml_data["tables"]
+    scoped_predictions = filter_ml_predictions(
+        tables["predictions"],
+        code_module,
+        code_presentation,
+    )
+
+    return (
+        build_ml_status(tables["metrics"]),
+        build_ml_kpi_cards(tables["metrics"]),
+        build_ml_model_comparison_table(tables["model_comparison"]),
+        build_ml_risk_band_distribution_figure(scoped_predictions),
+        build_ml_withdrawal_rate_by_risk_band_figure(scoped_predictions),
+        build_ml_feature_importance_figure(tables["feature_importance"]),
+        build_ml_highest_risk_table(scoped_predictions),
+    )
+
+
 DATA = load_dashboard_data()
+ML_DATA = load_ml_outputs()
 
 app = Dash(__name__)
 app.title = "Learning Analytics Intelligence Platform"
@@ -998,6 +1579,87 @@ app.layout = html.Div(
             ],
             style=SECTION_STYLE,
         ),
+        html.Section(
+            [
+                section_header(
+                    "Machine Learning: Day-30 Withdrawal Risk",
+                    "Review descriptive, dashboard-ready ML outputs read from "
+                    "DuckDB serving tables.",
+                ),
+                html.Ul(
+                    [
+                        html.Li(
+                            "Model setup: Logistic Regression baseline and "
+                            "Random Forest (RandomForestClassifier) challenger."
+                        ),
+                        html.Li("Selected model: selected by held-out ROC AUC."),
+                        html.Li("Prediction point: course day 30."),
+                        html.Li("Target: withdrawal after day 30."),
+                        html.Li(
+                            "Prediction population: students still enrolled "
+                            "after day 30."
+                        ),
+                        html.Li("Features: only information available up to day 30."),
+                        html.Li(
+                            "Dash displays precomputed outputs and does not "
+                            "train the model."
+                        ),
+                    ],
+                    style={
+                        "color": DASHBOARD_COLORS["muted"],
+                        "lineHeight": "1.45",
+                        "marginTop": 0,
+                    },
+                ),
+                html.Div(id="ml-serving-status"),
+                html.Div(
+                    id="ml-kpi-cards",
+                    style={
+                        "display": "grid",
+                        "gridTemplateColumns": "repeat(auto-fit, minmax(180px, 1fr))",
+                        "gap": "1rem",
+                        "marginBottom": "1rem",
+                    },
+                ),
+                html.Div(
+                    id="ml-model-comparison-table",
+                    style={
+                        "border": f"1px solid {DASHBOARD_COLORS['border']}",
+                        "borderRadius": "8px",
+                        "backgroundColor": DASHBOARD_COLORS["surface"],
+                        "marginBottom": "1rem",
+                    },
+                ),
+                html.Div(
+                    [
+                        dcc.Graph(id="ml-risk-band-distribution"),
+                        dcc.Graph(id="ml-withdrawal-rate-by-risk-band"),
+                        dcc.Graph(id="ml-feature-importance"),
+                    ],
+                    style=GRAPH_GRID_STYLE,
+                ),
+                html.Div(
+                    [
+                        html.H3(
+                            "Highest Predicted-Risk Student-Module Attempts",
+                            style={
+                                "fontSize": "1.05rem",
+                                "margin": "1rem 0 0.75rem",
+                            },
+                        ),
+                        html.Div(
+                            id="ml-highest-risk-table",
+                            style={
+                                "border": f"1px solid {DASHBOARD_COLORS['border']}",
+                                "borderRadius": "8px",
+                                "backgroundColor": DASHBOARD_COLORS["surface"],
+                            },
+                        ),
+                    ]
+                ),
+            ],
+            style=SECTION_STYLE,
+        ),
     ],
     style={
         "fontFamily": "Arial, sans-serif",
@@ -1034,6 +1696,13 @@ def update_presentation_options(code_module: str | None):
     Output("risk-band-distribution", "figure"),
     Output("withdrawal-rate-by-risk-band", "figure"),
     Output("student-risk-table", "children"),
+    Output("ml-serving-status", "children"),
+    Output("ml-kpi-cards", "children"),
+    Output("ml-model-comparison-table", "children"),
+    Output("ml-risk-band-distribution", "figure"),
+    Output("ml-withdrawal-rate-by-risk-band", "figure"),
+    Output("ml-feature-importance", "figure"),
+    Output("ml-highest-risk-table", "children"),
     Input("module-dropdown", "value"),
     Input("presentation-dropdown", "value"),
 )
@@ -1055,6 +1724,7 @@ def update_dashboard(code_module: str | None, code_presentation: str | None):
         code_module,
         code_presentation,
     )
+    ml_outputs = build_ml_outputs(ML_DATA, code_module, code_presentation)
 
     return (
         build_kpi_cards(students, engagement, assessments, success_features),
@@ -1068,6 +1738,7 @@ def update_dashboard(code_module: str | None, code_presentation: str | None):
         build_risk_band_count_figure(success_features),
         build_withdrawal_by_risk_band_figure(success_features),
         build_student_risk_table(success_features),
+        *ml_outputs,
     )
 
 
