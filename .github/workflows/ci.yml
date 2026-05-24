@@ -37,15 +37,16 @@ jobs:
           PYTHONPYCACHEPREFIX=/tmp/laip-pycache python -m py_compile \
             ingestion/validate_raw_data.py \
             ingestion/load_raw_to_duckdb.py \
-            dashboard/app.py
+            dashboard/app.py \
+            insights/generate_insight_cards.py
 
       - name: Ruff linting
         shell: bash -el {0}
-        run: RUFF_CACHE_DIR=/tmp/laip-ruff-cache ruff check ingestion dashboard
+        run: RUFF_CACHE_DIR=/tmp/laip-ruff-cache ruff check ingestion dashboard insights
 
       - name: Black formatting check
         shell: bash -el {0}
-        run: black --check ingestion dashboard
+        run: black --check ingestion dashboard insights
 
       - name: dbt parse
         shell: bash -el {0}
