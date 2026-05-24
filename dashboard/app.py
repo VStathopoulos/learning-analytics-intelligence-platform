@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 import plotly.express as px
-from dash import Dash, Input, Output, dcc, html
+from dash import Dash, Input, Output, dash_table, dcc, html
 
 
 DASHBOARD_DIR = Path(__file__).resolve().parent
@@ -16,6 +16,7 @@ MART_TABLES = {
     "student_module": "dim_student_module",
     "course_engagement_daily": "fct_course_engagement_daily",
     "assessment_performance": "fct_assessment_performance",
+    "student_success_features": "mart_student_success_features",
 }
 
 EXPECTED_COLUMNS = {
@@ -40,7 +41,41 @@ EXPECTED_COLUMNS = {
         "submitted_assessments",
         "average_score",
     ],
+    "student_success_features": [
+        "code_module",
+        "code_presentation",
+        "id_student",
+        "risk_band",
+        "risk_score_simple",
+        "final_result",
+        "is_withdrawn",
+        "total_clicks",
+        "active_days",
+        "has_declining_engagement",
+        "average_score",
+        "submitted_assessments",
+        "average_submission_delay_days",
+        "is_low_engagement",
+    ],
 }
+
+RISK_BAND_ORDER = ["Low", "Medium", "High"]
+RISK_BAND_SORT_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+STUDENT_RISK_COLUMNS = [
+    "id_student",
+    "code_module",
+    "code_presentation",
+    "risk_band",
+    "risk_score_simple",
+    "final_result",
+    "is_withdrawn",
+    "total_clicks",
+    "active_days",
+    "has_declining_engagement",
+    "average_score",
+    "submitted_assessments",
+    "average_submission_delay_days",
+]
 
 
 def load_mart_table(table_key: str) -> pd.DataFrame:
@@ -103,14 +138,58 @@ def empty_figure(message: str):
     return figure
 
 
-def format_number(value: float | int) -> str:
+def format_number(value: float | int | None) -> str:
     """Format dashboard numbers for KPI cards."""
+    if value is None or pd.isna(value):
+        return "N/A"
     return f"{value:,.0f}"
 
 
-def format_percent(value: float) -> str:
+def format_percent(value: float | None) -> str:
     """Format dashboard percentages for KPI cards."""
+    if value is None or pd.isna(value):
+        return "N/A"
     return f"{value:.1f}%"
+
+
+def format_decimal(value: float | None) -> str:
+    """Format score-like values for KPI cards."""
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:.1f}"
+
+
+def normalize_bool_value(value):
+    """Normalize boolean-like mart values for analytics and labels."""
+    if pd.isna(value):
+        return pd.NA
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def numeric_mean(data_frame: pd.DataFrame, column: str) -> float | None:
+    """Calculate a mean after removing null and non-numeric values."""
+    if data_frame.empty or column not in data_frame.columns:
+        return None
+
+    values = pd.to_numeric(data_frame[column], errors="coerce").dropna()
+    if values.empty:
+        return None
+
+    return float(values.mean())
+
+
+def boolean_rate(data_frame: pd.DataFrame, column: str) -> float | None:
+    """Calculate the percent of true values in a boolean-like column."""
+    if data_frame.empty or column not in data_frame.columns:
+        return None
+
+    values = data_frame[column].map(normalize_bool_value).dropna()
+    if values.empty:
+        return None
+
+    return float(values.astype(bool).mean() * 100)
 
 
 def weighted_average(
@@ -139,6 +218,7 @@ def build_kpi_cards(
     students: pd.DataFrame,
     engagement: pd.DataFrame,
     assessments: pd.DataFrame,
+    success_features: pd.DataFrame,
 ) -> list[html.Div]:
     """Build KPI cards from filtered mart data."""
     total_enrollments = len(students)
@@ -157,6 +237,17 @@ def build_kpi_cards(
         value_column="average_score",
         weight_column="submitted_assessments",
     )
+    high_risk_students = (
+        success_features[success_features["risk_band"] == "High"]
+        if "risk_band" in success_features.columns
+        else pd.DataFrame()
+    )
+    high_risk_count = len(high_risk_students)
+    high_risk_rate = (
+        high_risk_count / len(success_features) * 100 if len(success_features) else None
+    )
+    high_risk_withdrawal_rate = boolean_rate(high_risk_students, "is_withdrawn")
+    high_risk_average_score = numeric_mean(high_risk_students, "average_score")
 
     kpis = [
         ("Total Enrollments", format_number(total_enrollments)),
@@ -166,6 +257,13 @@ def build_kpi_cards(
             "Average Assessment Score",
             f"{average_score:.1f}" if average_score is not None else "N/A",
         ),
+        ("High-Risk Students", format_number(high_risk_count)),
+        ("High-Risk Rate", format_percent(high_risk_rate)),
+        (
+            "High-Risk Withdrawal Rate",
+            format_percent(high_risk_withdrawal_rate),
+        ),
+        ("High-Risk Average Score", format_decimal(high_risk_average_score)),
     ]
     return [kpi_card(label, value) for label, value in kpis]
 
@@ -281,6 +379,286 @@ def build_assessment_score_figure(assessments: pd.DataFrame):
     )
 
 
+def build_withdrawal_by_declining_engagement_figure(success_features: pd.DataFrame):
+    """Build withdrawal rate by declining engagement chart."""
+    required_columns = {"has_declining_engagement", "is_withdrawn"}
+    if success_features.empty or not required_columns.issubset(
+        success_features.columns
+    ):
+        return empty_figure("No student-success data available")
+
+    chart_data = success_features.copy()
+    engagement_labels = {
+        False: "No declining engagement",
+        True: "Declining engagement",
+    }
+    chart_data["engagement_pattern"] = (
+        chart_data["has_declining_engagement"]
+        .map(normalize_bool_value)
+        .map(engagement_labels)
+    )
+    chart_data["withdrawn_flag"] = chart_data["is_withdrawn"].map(normalize_bool_value)
+    chart_data = chart_data.dropna(subset=["engagement_pattern", "withdrawn_flag"])
+    if chart_data.empty:
+        return empty_figure("No withdrawal data available by engagement pattern")
+
+    chart_data["withdrawn_flag"] = chart_data["withdrawn_flag"].astype(bool)
+    grouped = (
+        chart_data.groupby("engagement_pattern", as_index=False)["withdrawn_flag"]
+        .mean()
+        .rename(columns={"withdrawn_flag": "withdrawal_rate"})
+    )
+    grouped["withdrawal_rate"] = grouped["withdrawal_rate"] * 100
+
+    figure = px.bar(
+        grouped,
+        x="engagement_pattern",
+        y="withdrawal_rate",
+        title="Withdrawal Rate By Declining Engagement",
+        labels={
+            "engagement_pattern": "Engagement Pattern",
+            "withdrawal_rate": "Withdrawal Rate",
+        },
+        category_orders={"engagement_pattern": list(engagement_labels.values())},
+    )
+    figure.update_yaxes(ticksuffix="%")
+    return figure
+
+
+def build_score_by_low_engagement_figure(success_features: pd.DataFrame):
+    """Build average score by low-engagement status chart."""
+    required_columns = {"is_low_engagement", "average_score"}
+    if success_features.empty or not required_columns.issubset(
+        success_features.columns
+    ):
+        return empty_figure("No student-success data available")
+
+    chart_data = success_features.copy()
+    engagement_labels = {
+        False: "Not low engagement",
+        True: "Low engagement",
+    }
+    chart_data["engagement_group"] = (
+        chart_data["is_low_engagement"].map(normalize_bool_value).map(engagement_labels)
+    )
+    chart_data["average_score"] = pd.to_numeric(
+        chart_data["average_score"],
+        errors="coerce",
+    )
+    chart_data = chart_data.dropna(subset=["engagement_group", "average_score"])
+    if chart_data.empty:
+        return empty_figure("No assessment scores available by engagement group")
+
+    grouped = chart_data.groupby("engagement_group", as_index=False)[
+        "average_score"
+    ].mean()
+
+    return px.bar(
+        grouped,
+        x="engagement_group",
+        y="average_score",
+        title="Average Assessment Score By Engagement Group",
+        labels={
+            "engagement_group": "Engagement Group",
+            "average_score": "Average Score",
+        },
+        category_orders={"engagement_group": list(engagement_labels.values())},
+    )
+
+
+def build_risk_band_count_figure(success_features: pd.DataFrame):
+    """Build student count by rule-based risk band chart."""
+    if success_features.empty or "risk_band" not in success_features.columns:
+        return empty_figure("No risk band data available")
+
+    chart_data = success_features.dropna(subset=["risk_band"]).copy()
+    if chart_data.empty:
+        return empty_figure("No risk band data available")
+
+    chart_data["risk_band"] = pd.Categorical(
+        chart_data["risk_band"],
+        categories=RISK_BAND_ORDER,
+        ordered=True,
+    )
+    chart_data = chart_data.dropna(subset=["risk_band"])
+    grouped = (
+        chart_data.groupby("risk_band", observed=True)
+        .size()
+        .reset_index(name="student_count")
+    )
+
+    return px.bar(
+        grouped,
+        x="risk_band",
+        y="student_count",
+        title="Student Count By Rule-Based Risk Band",
+        labels={"risk_band": "Risk Band", "student_count": "Students"},
+        category_orders={"risk_band": RISK_BAND_ORDER},
+    )
+
+
+def build_withdrawal_by_risk_band_figure(success_features: pd.DataFrame):
+    """Build withdrawal rate by rule-based risk band chart."""
+    required_columns = {"risk_band", "is_withdrawn"}
+    if success_features.empty or not required_columns.issubset(
+        success_features.columns
+    ):
+        return empty_figure("No risk band withdrawal data available")
+
+    chart_data = success_features.dropna(subset=["risk_band"]).copy()
+    chart_data["risk_band"] = pd.Categorical(
+        chart_data["risk_band"],
+        categories=RISK_BAND_ORDER,
+        ordered=True,
+    )
+    chart_data["withdrawn_flag"] = chart_data["is_withdrawn"].map(normalize_bool_value)
+    chart_data = chart_data.dropna(subset=["risk_band", "withdrawn_flag"])
+    if chart_data.empty:
+        return empty_figure("No risk band withdrawal data available")
+
+    chart_data["withdrawn_flag"] = chart_data["withdrawn_flag"].astype(bool)
+    grouped = (
+        chart_data.groupby("risk_band", observed=True)["withdrawn_flag"]
+        .mean()
+        .reset_index(name="withdrawal_rate")
+    )
+    grouped["withdrawal_rate"] = grouped["withdrawal_rate"] * 100
+
+    figure = px.bar(
+        grouped,
+        x="risk_band",
+        y="withdrawal_rate",
+        title="Withdrawal Rate By Rule-Based Risk Band",
+        labels={"risk_band": "Risk Band", "withdrawal_rate": "Withdrawal Rate"},
+        category_orders={"risk_band": RISK_BAND_ORDER},
+    )
+    figure.update_yaxes(ticksuffix="%")
+    return figure
+
+
+def format_bool_label(value) -> str:
+    """Format boolean-like values for the student risk table."""
+    normalized = normalize_bool_value(value)
+    if pd.isna(normalized):
+        return "N/A"
+    return "Yes" if normalized else "No"
+
+
+def build_student_risk_table(success_features: pd.DataFrame):
+    """Build a table of the highest-risk student-module attempts."""
+    if success_features.empty:
+        return html.Div(
+            "No student-success feature data available for the selected scope.",
+            style={"color": "#52606d", "padding": "1rem"},
+        )
+
+    missing_columns = [
+        column for column in STUDENT_RISK_COLUMNS if column not in success_features
+    ]
+    if missing_columns:
+        return html.Div(
+            "Student-success mart is missing expected columns for the risk table.",
+            style={"color": "#52606d", "padding": "1rem"},
+        )
+
+    table_data = success_features.copy()
+    table_data["_risk_score_sort"] = pd.to_numeric(
+        table_data["risk_score_simple"],
+        errors="coerce",
+    ).fillna(-1)
+    table_data["_risk_band_sort"] = (
+        table_data["risk_band"].map(RISK_BAND_SORT_ORDER).fillna(99)
+    )
+    table_data["_total_clicks_sort"] = pd.to_numeric(
+        table_data["total_clicks"],
+        errors="coerce",
+    ).fillna(float("inf"))
+    table_data["_average_score_sort"] = pd.to_numeric(
+        table_data["average_score"],
+        errors="coerce",
+    ).fillna(float("inf"))
+
+    table_data = table_data.sort_values(
+        [
+            "_risk_score_sort",
+            "_risk_band_sort",
+            "_total_clicks_sort",
+            "_average_score_sort",
+        ],
+        ascending=[False, True, True, True],
+    ).head(50)
+
+    display_data = table_data[STUDENT_RISK_COLUMNS].copy()
+    for column in [
+        "risk_score_simple",
+        "total_clicks",
+        "active_days",
+        "submitted_assessments",
+    ]:
+        display_data[column] = pd.to_numeric(
+            display_data[column],
+            errors="coerce",
+        ).round(0)
+
+    for column in ["average_score", "average_submission_delay_days"]:
+        display_data[column] = pd.to_numeric(
+            display_data[column],
+            errors="coerce",
+        ).round(1)
+
+    display_data["is_withdrawn"] = display_data["is_withdrawn"].map(format_bool_label)
+    display_data["has_declining_engagement"] = display_data[
+        "has_declining_engagement"
+    ].map(format_bool_label)
+    display_data = display_data.where(pd.notna(display_data), None)
+
+    table_columns = [
+        {"name": "Anonymized Student ID", "id": "id_student"},
+        {"name": "Module", "id": "code_module"},
+        {"name": "Presentation", "id": "code_presentation"},
+        {"name": "Risk Band", "id": "risk_band"},
+        {"name": "Risk Score", "id": "risk_score_simple"},
+        {"name": "Final Result", "id": "final_result"},
+        {"name": "Withdrawn", "id": "is_withdrawn"},
+        {"name": "Total Clicks", "id": "total_clicks"},
+        {"name": "Active Days", "id": "active_days"},
+        {"name": "Declining Engagement", "id": "has_declining_engagement"},
+        {"name": "Average Score", "id": "average_score"},
+        {"name": "Submitted Assessments", "id": "submitted_assessments"},
+        {"name": "Avg Submission Delay", "id": "average_submission_delay_days"},
+    ]
+
+    return dash_table.DataTable(
+        columns=table_columns,
+        data=display_data.to_dict("records"),
+        page_size=10,
+        sort_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "Arial, sans-serif",
+            "fontSize": "0.85rem",
+            "padding": "0.55rem",
+            "textAlign": "left",
+            "minWidth": "90px",
+        },
+        style_header={
+            "backgroundColor": "#f0f4f8",
+            "fontWeight": "700",
+            "border": "1px solid #d9e2ec",
+        },
+        style_data={
+            "backgroundColor": "white",
+            "border": "1px solid #e4e7eb",
+        },
+        style_data_conditional=[
+            {
+                "if": {"filter_query": '{risk_band} = "High"'},
+                "backgroundColor": "#fff5f5",
+            },
+        ],
+    )
+
+
 DATA = load_dashboard_data()
 
 app = Dash(__name__)
@@ -358,6 +736,39 @@ app.layout = html.Div(
                 "gap": "1rem",
             },
         ),
+        html.Section(
+            [
+                html.H2(
+                    "Student Success Signals",
+                    style={"fontSize": "1.35rem", "margin": "1.5rem 0 0.75rem"},
+                ),
+                html.Div(
+                    [
+                        dcc.Graph(id="withdrawal-rate-by-declining-engagement"),
+                        dcc.Graph(id="average-score-by-low-engagement"),
+                        dcc.Graph(id="risk-band-distribution"),
+                        dcc.Graph(id="withdrawal-rate-by-risk-band"),
+                    ],
+                    style={
+                        "display": "grid",
+                        "gridTemplateColumns": "repeat(auto-fit, minmax(360px, 1fr))",
+                        "gap": "1rem",
+                    },
+                ),
+                html.H2(
+                    "Highest-Risk Student-Module Attempts",
+                    style={"fontSize": "1.35rem", "margin": "1.5rem 0 0.75rem"},
+                ),
+                html.Div(
+                    id="student-risk-table",
+                    style={
+                        "border": "1px solid #d9e2ec",
+                        "borderRadius": "8px",
+                        "backgroundColor": "white",
+                    },
+                ),
+            ]
+        ),
     ],
     style={
         "fontFamily": "Arial, sans-serif",
@@ -388,6 +799,11 @@ def update_presentation_options(code_module: str | None):
     Output("active-students-over-time", "figure"),
     Output("final-result-distribution", "figure"),
     Output("assessment-score-by-type", "figure"),
+    Output("withdrawal-rate-by-declining-engagement", "figure"),
+    Output("average-score-by-low-engagement", "figure"),
+    Output("risk-band-distribution", "figure"),
+    Output("withdrawal-rate-by-risk-band", "figure"),
+    Output("student-risk-table", "children"),
     Input("module-dropdown", "value"),
     Input("presentation-dropdown", "value"),
 )
@@ -404,13 +820,23 @@ def update_dashboard(code_module: str | None, code_presentation: str | None):
         code_module,
         code_presentation,
     )
+    success_features = filter_by_scope(
+        DATA["student_success_features"],
+        code_module,
+        code_presentation,
+    )
 
     return (
-        build_kpi_cards(students, engagement, assessments),
+        build_kpi_cards(students, engagement, assessments, success_features),
         build_clicks_figure(engagement),
         build_active_students_figure(engagement),
         build_final_result_figure(students),
         build_assessment_score_figure(assessments),
+        build_withdrawal_by_declining_engagement_figure(success_features),
+        build_score_by_low_engagement_figure(success_features),
+        build_risk_band_count_figure(success_features),
+        build_withdrawal_by_risk_band_figure(success_features),
+        build_student_risk_table(success_features),
     )
 
 
