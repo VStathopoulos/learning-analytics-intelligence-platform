@@ -145,3 +145,213 @@ models:
         description: Count of banked submissions.
         data_tests:
           - not_null
+
+  - name: fct_student_engagement_summary
+    description: Student-level VLE engagement summary at the grain of one row per code_module, code_presentation, id_student. Supports analysis of total engagement, active learning days, and declining engagement within each student's observed activity window.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: first_activity_date
+        description: Earliest observed VLE activity date for the student in the module presentation.
+      - name: last_activity_date
+        description: Latest observed VLE activity date for the student in the module presentation.
+      - name: active_days
+        description: Count of distinct VLE activity days observed for the student.
+        data_tests:
+          - not_null
+      - name: total_clicks
+        description: Total VLE clicks observed for the student.
+        data_tests:
+          - not_null
+      - name: average_clicks_per_active_day
+        description: Average VLE clicks per active learning day.
+      - name: total_active_sites
+        description: Total active VLE site counts across the student's active days.
+        data_tests:
+          - not_null
+      - name: average_active_sites_per_active_day
+        description: Average active VLE sites per active learning day.
+      - name: total_activity_types
+        description: Total activity type counts across the student's active days.
+        data_tests:
+          - not_null
+      - name: average_activity_types_per_active_day
+        description: Average activity types per active learning day.
+      - name: early_total_clicks
+        description: Total clicks on or before the midpoint of the student's observed activity window.
+        data_tests:
+          - not_null
+      - name: late_total_clicks
+        description: Total clicks after the midpoint of the student's observed activity window.
+        data_tests:
+          - not_null
+      - name: engagement_change_ratio
+        description: Ratio of late-window clicks to early-window clicks; null when early clicks are zero.
+      - name: has_declining_engagement
+        description: Boolean flag indicating whether late-window clicks are lower than early-window clicks.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+  - name: fct_student_assessment_summary
+    description: Student-level assessment summary at the grain of one row per code_module, code_presentation, id_student. Supports analysis of assessment participation, average score, weighted score, late submissions, and banked submissions.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: submitted_assessments
+        description: Count of submitted assessment records for the student.
+        data_tests:
+          - not_null
+      - name: distinct_assessments_submitted
+        description: Count of distinct assessments submitted by the student.
+        data_tests:
+          - not_null
+      - name: average_score
+        description: Average assessment score across the student's submitted assessments.
+      - name: average_weighted_score
+        description: Average weighted assessment score across the student's submitted assessments.
+      - name: total_weighted_score
+        description: Sum of weighted assessment scores across the student's submitted assessments.
+      - name: average_submission_delay_days
+        description: Average delay between assessment due date and submission date in days.
+      - name: late_submission_count
+        description: Count of submitted assessments where submission occurred after the assessment date.
+        data_tests:
+          - not_null
+      - name: banked_submission_count
+        description: Count of banked assessment submissions.
+        data_tests:
+          - not_null
+
+  - name: mart_student_success_features
+    description: Student-success analytical feature mart at the grain of one row per code_module, code_presentation, id_student. Combines enrollment, demographics, engagement, assessment behavior, final outcome, and rule-based risk indicators. The risk indicators are interpretable analytical flags, not a validated predictive model.
+    columns:
+      - name: code_module
+        description: Course module code.
+        data_tests:
+          - not_null
+      - name: code_presentation
+        description: Course presentation code.
+        data_tests:
+          - not_null
+      - name: id_student
+        description: Student identifier.
+        data_tests:
+          - not_null
+      - name: gender
+        description: Student gender category.
+      - name: region
+        description: Student region.
+      - name: highest_education
+        description: Highest education level reported for the student.
+      - name: imd_band
+        description: Index of Multiple Deprivation band, where available.
+      - name: age_band
+        description: Student age band.
+      - name: num_of_prev_attempts
+        description: Number of previous attempts for the module.
+      - name: studied_credits
+        description: Number of credits studied by the student.
+      - name: disability
+        description: Student disability indicator.
+      - name: final_result
+        description: Student final result for the module presentation.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Distinction", "Pass", "Fail", "Withdrawn"]
+      - name: is_withdrawn
+        description: Boolean flag indicating whether the final result is Withdrawn.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_unregistered
+        description: Boolean flag indicating whether an unregistration date exists.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: active_days
+        description: Count of distinct VLE activity days observed for the student.
+        data_tests:
+          - not_null
+      - name: total_clicks
+        description: Total VLE clicks observed for the student.
+        data_tests:
+          - not_null
+      - name: submitted_assessments
+        description: Count of submitted assessment records for the student.
+        data_tests:
+          - not_null
+      - name: is_low_engagement
+        description: Rule-based analytical flag for students with missing or low total VLE clicks.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: is_low_assessment_score
+        description: Rule-based analytical flag for students with missing or low average assessment score.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_declining_engagement
+        description: Rule-based analytical flag indicating whether late-window clicks are lower than early-window clicks.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_late_submission_pattern
+        description: Rule-based analytical flag indicating whether the student has a positive average submission delay.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: risk_score_simple
+        description: Simple count of rule-based student-success risk indicators present for the student.
+        data_tests:
+          - not_null
+      - name: risk_band
+        description: Rule-based analytical risk band derived from risk_score_simple.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Low", "Medium", "High"]
