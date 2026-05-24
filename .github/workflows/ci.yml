@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Code Quality and dbt Parse
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up micromamba environment
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: environment.yml
+          environment-name: laip
+          cache-environment: true
+
+      - name: Show Python version
+        shell: bash -el {0}
+        run: python --version
+
+      - name: Python syntax check
+        shell: bash -el {0}
+        run: |
+          PYTHONPYCACHEPREFIX=/tmp/laip-pycache python -m py_compile \
+            ingestion/validate_raw_data.py \
+            ingestion/load_raw_to_duckdb.py \
+            dashboard/app.py
+
+      - name: Ruff linting
+        shell: bash -el {0}
+        run: RUFF_CACHE_DIR=/tmp/laip-ruff-cache ruff check ingestion dashboard
+
+      - name: Black formatting check
+        shell: bash -el {0}
+        run: black --check ingestion dashboard
+
+      - name: dbt parse
+        shell: bash -el {0}
+        run: |
+          cd dbt
+          dbt parse \
+            --profiles-dir . \
+            --target-path /tmp/laip-dbt-target \
+            --log-path /tmp/laip-dbt-logs
