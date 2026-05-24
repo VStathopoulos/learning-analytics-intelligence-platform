@@ -1,7 +1,7 @@
-# Withdrawal Prediction Baseline
+# Withdrawal Prediction Models
 
-This directory contains a leakage-safe baseline training script for day-30
-withdrawal prediction.
+This directory contains a leakage-safe training script for day-30 withdrawal
+prediction.
 
 ## Task
 
@@ -19,27 +19,46 @@ Feature timing:
 - The model reads only the approved dbt mart
   `mart_withdrawal_prediction_features`.
 
-## Model
+## Models
 
-The first baseline model is Logistic Regression with preprocessing handled by a
-scikit-learn pipeline:
+The script trains two candidate models on the same leakage-safe temporal split:
 
-- Numeric features: median imputation and standard scaling.
-- Categorical features: most-frequent imputation and one-hot encoding.
-- Class balancing enabled with `class_weight="balanced"`.
+- Logistic Regression baseline with `class_weight="balanced"`.
+- Random Forest challenger with class balancing and a fixed random seed.
 
-Evaluation uses a temporal split: the latest available course presentation is
-held out for testing, and earlier presentations are used for training.
+Preprocessing is handled with scikit-learn pipelines:
+
+- Logistic Regression numeric features: median imputation and standard scaling.
+- Random Forest numeric features: median imputation.
+- Categorical features: missing-value handling and one-hot encoding.
+
+The selected model is chosen by held-out ROC AUC. If held-out ROC AUC ties,
+Logistic Regression is preferred for interpretability. If held-out ROC AUC is
+null for a model, that model is ranked last.
 
 ## Runtime Outputs
 
-The training script writes dashboard-ready runtime artifacts:
+The training script writes dashboard-ready runtime files:
 
 - `data/processed/ml_withdrawal_predictions.csv`
 - `data/processed/ml_withdrawal_metrics.json`
 - `data/processed/ml_withdrawal_feature_importance.csv`
+- `data/processed/ml_withdrawal_model_comparison.csv`
 
 These outputs are generated artifacts and should not be committed.
+
+## DuckDB Serving Tables
+
+The training script also creates or replaces dashboard-ready ML serving tables
+in the local DuckDB warehouse:
+
+- `ml_withdrawal_predictions`
+- `ml_withdrawal_metrics`
+- `ml_withdrawal_feature_importance`
+- `ml_withdrawal_model_comparison`
+
+The future dashboard should consume the DuckDB ML serving tables. Dash should
+not train models.
 
 ## Usage
 
@@ -48,6 +67,3 @@ Run from the project root after the DuckDB warehouse and dbt mart exist:
 ```bash
 python ml/train_withdrawal_model.py
 ```
-
-The future dashboard ML section should consume these generated outputs. Dash
-should not train the model.

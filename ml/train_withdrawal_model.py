@@ -1,9 +1,10 @@
-"""Train a leakage-safe day-30 withdrawal prediction baseline model."""
+"""Train leakage-safe day-30 withdrawal prediction models."""
 
 from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from inspect import signature
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -26,9 +28,19 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 SOURCE_TABLE = "mart_withdrawal_prediction_features"
-MODEL_VERSION = "logistic_regression_day30_v1"
+LOGISTIC_REGRESSION_MODEL_VERSION = "logistic_regression_day30_v1"
+RANDOM_FOREST_MODEL_VERSION = "random_forest_day30_v1"
 TARGET_COLUMN = "withdraw_after_day_30"
 MISSING_CATEGORY = "__missing__"
+SPLIT_STRATEGY = (
+    "Train on presentations before the latest; test on latest presentation."
+)
+SERVING_TABLES = {
+    "predictions": "ml_withdrawal_predictions",
+    "metrics": "ml_withdrawal_metrics",
+    "feature_importance": "ml_withdrawal_feature_importance",
+    "model_comparison": "ml_withdrawal_model_comparison",
+}
 IDENTIFIER_COLUMNS = [
     "code_module",
     "code_presentation",
@@ -64,10 +76,45 @@ PREDICTION_COLUMNS = [
 ]
 FEATURE_IMPORTANCE_COLUMNS = [
     "feature",
-    "coefficient",
-    "abs_coefficient",
+    "importance_type",
+    "importance_value",
+    "abs_importance_value",
     "model_version",
 ]
+MODEL_COMPARISON_COLUMNS = [
+    "model_type",
+    "model_version",
+    "selected_model",
+    "roc_auc",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "true_negative",
+    "false_positive",
+    "false_negative",
+    "true_positive",
+    "train_rows",
+    "test_rows",
+    "positive_rate_train",
+    "positive_rate_test",
+    "prediction_day",
+    "target",
+    "generated_at",
+    "split_strategy",
+    "selection_reason",
+]
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """Configuration for one withdrawal prediction model candidate."""
+
+    model_type: str
+    model_version: str
+    estimator: object
+    scale_numeric: bool
+    importance_type: str
 
 
 def get_project_root() -> Path:
@@ -92,8 +139,8 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "Train a leakage-safe Logistic Regression baseline for day-30 "
-            "withdrawal prediction."
+            "Train leakage-safe Logistic Regression and Random Forest models "
+            "for day-30 withdrawal prediction."
         )
     )
     parser.add_argument(
@@ -104,19 +151,50 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--predictions-output",
         default="data/processed/ml_withdrawal_predictions.csv",
-        help="Path for scored withdrawal predictions.",
+        help="Path for scored withdrawal predictions from the selected model.",
     )
     parser.add_argument(
         "--metrics-output",
         default="data/processed/ml_withdrawal_metrics.json",
-        help="Path for model evaluation metrics.",
+        help="Path for selected model evaluation metrics.",
     )
     parser.add_argument(
         "--feature-importance-output",
         default="data/processed/ml_withdrawal_feature_importance.csv",
-        help="Path for Logistic Regression feature coefficients.",
+        help="Path for selected model feature importance.",
+    )
+    parser.add_argument(
+        "--model-comparison-output",
+        default="data/processed/ml_withdrawal_model_comparison.csv",
+        help="Path for held-out metric comparison across model candidates.",
     )
     return parser.parse_args()
+
+
+def get_model_specs() -> list[ModelSpec]:
+    """Build the baseline and challenger model configurations."""
+    return [
+        ModelSpec(
+            model_type="LogisticRegression",
+            model_version=LOGISTIC_REGRESSION_MODEL_VERSION,
+            estimator=LogisticRegression(max_iter=1000, class_weight="balanced"),
+            scale_numeric=True,
+            importance_type="coefficient",
+        ),
+        ModelSpec(
+            model_type="RandomForestClassifier",
+            model_version=RANDOM_FOREST_MODEL_VERSION,
+            estimator=RandomForestClassifier(
+                n_estimators=300,
+                min_samples_leaf=10,
+                class_weight="balanced",
+                random_state=42,
+                n_jobs=-1,
+            ),
+            scale_numeric=False,
+            importance_type="gini_importance",
+        ),
+    ]
 
 
 def load_feature_mart(duckdb_path: Path) -> pd.DataFrame:
@@ -124,18 +202,16 @@ def load_feature_mart(duckdb_path: Path) -> pd.DataFrame:
     if not duckdb_path.exists():
         raise FileNotFoundError(
             f"DuckDB warehouse not found at {duckdb_path}. Run ingestion and dbt "
-            "before training the withdrawal baseline."
+            "before training withdrawal prediction models."
         )
 
     try:
         with duckdb.connect(str(duckdb_path), read_only=True) as connection:
-            return connection.execute(
-                "select * from mart_withdrawal_prediction_features"
-            ).fetchdf()
+            return connection.execute(f"select * from {SOURCE_TABLE}").fetchdf()
     except duckdb.Error as exc:
         raise RuntimeError(
-            "Could not load mart_withdrawal_prediction_features from DuckDB. "
-            "Run dbt before training the withdrawal baseline."
+            f"Could not load {SOURCE_TABLE} from DuckDB. Run dbt before training "
+            "withdrawal prediction models."
         ) from exc
 
 
@@ -252,22 +328,26 @@ def make_one_hot_encoder() -> OneHotEncoder:
     return OneHotEncoder(**encoder_kwargs)
 
 
+def build_numeric_pipeline(scale_numeric: bool) -> Pipeline:
+    """Build numeric preprocessing for the candidate model."""
+    steps = [("imputer", SimpleImputer(strategy="median"))]
+    if scale_numeric:
+        steps.append(("scaler", StandardScaler()))
+    return Pipeline(steps=steps)
+
+
 def build_model_pipeline(
     numeric_columns: list[str],
     categorical_columns: list[str],
+    spec: ModelSpec,
 ) -> Pipeline:
-    """Build the preprocessing and Logistic Regression pipeline."""
+    """Build preprocessing and estimator steps for a model candidate."""
     transformers = []
     if numeric_columns:
         transformers.append(
             (
                 "numeric",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                    ]
-                ),
+                build_numeric_pipeline(spec.scale_numeric),
                 numeric_columns,
             )
         )
@@ -298,10 +378,7 @@ def build_model_pipeline(
     return Pipeline(
         steps=[
             ("preprocessor", preprocessor),
-            (
-                "model",
-                LogisticRegression(max_iter=1000, class_weight="balanced"),
-            ),
+            ("model", spec.estimator),
         ]
     )
 
@@ -325,11 +402,13 @@ def safe_roc_auc(
 
 
 def build_metrics(
+    spec: ModelSpec,
     y_train: pd.Series,
     y_test: pd.Series,
     y_pred: pd.Series,
     y_probability: pd.Series,
     prediction_day: int,
+    generated_at: str,
     warnings: list[str],
 ) -> dict:
     """Build model evaluation metrics for the held-out presentation."""
@@ -344,12 +423,12 @@ def build_metrics(
     ).ravel()
 
     return {
-        "model_type": "LogisticRegression",
-        "model_version": MODEL_VERSION,
+        "model_type": spec.model_type,
+        "model_version": spec.model_version,
         "target": TARGET_COLUMN,
         "prediction_day": prediction_day,
-        "split_strategy": "Train on presentations before the latest; test on latest presentation.",
-        "generated_at": utc_timestamp(),
+        "split_strategy": SPLIT_STRATEGY,
+        "generated_at": generated_at,
         "train_rows": int(len(y_train)),
         "test_rows": int(len(y_test)),
         "positive_rate_train": float(y_train.mean()),
@@ -367,99 +446,19 @@ def build_metrics(
     }
 
 
-def build_predictions(
-    data_frame: pd.DataFrame,
-    probabilities: pd.Series,
-) -> pd.DataFrame:
-    """Build the dashboard-ready prediction output."""
-    predictions = data_frame[
-        [
-            "code_module",
-            "code_presentation",
-            "id_student",
-            "prediction_day",
-            "split",
-            TARGET_COLUMN,
-        ]
-    ].copy()
-    predictions[TARGET_COLUMN] = target_to_binary(predictions[TARGET_COLUMN])
-    predictions["predicted_withdrawal_probability"] = probabilities.round(6)
-    predictions["predicted_risk_band"] = predictions[
-        "predicted_withdrawal_probability"
-    ].map(probability_to_risk_band)
-    predictions["model_version"] = MODEL_VERSION
-    return predictions[PREDICTION_COLUMNS]
-
-
-def extract_feature_importance(model: Pipeline, warnings: list[str]) -> pd.DataFrame:
-    """Extract Logistic Regression coefficients for transformed features."""
-    try:
-        feature_names = model.named_steps["preprocessor"].get_feature_names_out()
-        coefficients = model.named_steps["model"].coef_[0]
-    except (AttributeError, KeyError, IndexError, ValueError) as exc:
-        warnings.append(f"Feature importance could not be extracted: {exc}")
-        return pd.DataFrame(columns=FEATURE_IMPORTANCE_COLUMNS)
-
-    importance = pd.DataFrame(
-        {
-            "feature": feature_names,
-            "coefficient": coefficients,
-        }
-    )
-    importance["abs_coefficient"] = importance["coefficient"].abs()
-    importance["model_version"] = MODEL_VERSION
-    return importance.sort_values("abs_coefficient", ascending=False)[
-        FEATURE_IMPORTANCE_COLUMNS
-    ]
-
-
-def write_outputs(
-    predictions: pd.DataFrame,
-    metrics: dict,
-    feature_importance: pd.DataFrame,
-    predictions_output: Path,
-    metrics_output: Path,
-    feature_importance_output: Path,
-) -> None:
-    """Write local runtime prediction, metrics, and feature importance artifacts."""
-    predictions_output.parent.mkdir(parents=True, exist_ok=True)
-    metrics_output.parent.mkdir(parents=True, exist_ok=True)
-    feature_importance_output.parent.mkdir(parents=True, exist_ok=True)
-
-    predictions.to_csv(predictions_output, index=False)
-    metrics_output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    feature_importance.to_csv(feature_importance_output, index=False)
-
-
-def main() -> None:
-    """Train and score the leakage-safe withdrawal baseline."""
-    args = parse_args()
-    project_root = get_project_root()
-    duckdb_path = resolve_project_path(project_root, args.duckdb_path)
-    predictions_output = resolve_project_path(project_root, args.predictions_output)
-    metrics_output = resolve_project_path(project_root, args.metrics_output)
-    feature_importance_output = resolve_project_path(
-        project_root,
-        args.feature_importance_output,
-    )
-
-    data = load_feature_mart(duckdb_path)
-    require_columns(data)
-    data[TARGET_COLUMN] = target_to_binary(data[TARGET_COLUMN])
-    data = assign_temporal_split(data)
-
-    prediction_days = sorted(data["prediction_day"].dropna().unique())
-    if len(prediction_days) != 1:
-        raise ValueError("Expected exactly one prediction_day in the feature mart.")
-    prediction_day = int(prediction_days[0])
-
-    feature_columns = select_feature_columns(data)
-    numeric_columns, categorical_columns = split_feature_types(data, feature_columns)
-    data = prepare_categorical_features(data, categorical_columns)
-    model = build_model_pipeline(numeric_columns, categorical_columns)
-
-    train_data = data[data["split"] == "train"].copy()
-    test_data = data[data["split"] == "test"].copy()
+def fit_and_evaluate_model(
+    spec: ModelSpec,
+    numeric_columns: list[str],
+    categorical_columns: list[str],
+    feature_columns: list[str],
+    train_data: pd.DataFrame,
+    test_data: pd.DataFrame,
+    data: pd.DataFrame,
+    prediction_day: int,
+    generated_at: str,
+) -> dict:
+    """Train one model candidate and evaluate it on the held-out split."""
+    model = build_model_pipeline(numeric_columns, categorical_columns, spec)
     x_train = train_data[feature_columns]
     y_train = train_data[TARGET_COLUMN]
     x_test = test_data[feature_columns]
@@ -478,28 +477,331 @@ def main() -> None:
     )
 
     warnings = []
-    feature_importance = extract_feature_importance(model, warnings)
     metrics = build_metrics(
+        spec=spec,
         y_train=y_train,
         y_test=y_test,
         y_pred=test_predictions,
         y_probability=test_probabilities,
         prediction_day=prediction_day,
+        generated_at=generated_at,
         warnings=warnings,
     )
-    predictions = build_predictions(data, all_probabilities)
+    return {
+        "spec": spec,
+        "model": model,
+        "metrics": metrics,
+        "all_probabilities": all_probabilities,
+    }
 
-    write_outputs(
+
+def roc_auc_sort_value(roc_auc: float | None) -> float:
+    """Return a sortable ROC AUC value with nulls ranked last."""
+    if roc_auc is None or pd.isna(roc_auc):
+        return float("-inf")
+    return float(roc_auc)
+
+
+def is_roc_auc_tie(left: float | None, right: float | None) -> bool:
+    """Check exact ROC AUC ties, treating two null values as tied."""
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    return float(left) == float(right)
+
+
+def select_best_model(results: list[dict]) -> dict:
+    """Select the best model by held-out ROC AUC, preferring LR in ties."""
+    return max(
+        results,
+        key=lambda result: (
+            roc_auc_sort_value(result["metrics"]["roc_auc"]),
+            result["spec"].model_type == "LogisticRegression",
+        ),
+    )
+
+
+def build_selection_reason(selected_result: dict, results: list[dict]) -> str:
+    """Describe why the selected model was chosen."""
+    selected_auc = selected_result["metrics"]["roc_auc"]
+    selected_model_type = selected_result["spec"].model_type
+    tied_for_best = any(
+        result is not selected_result
+        and is_roc_auc_tie(selected_auc, result["metrics"]["roc_auc"])
+        for result in results
+    )
+
+    if selected_auc is None:
+        return (
+            f"Selected {selected_model_type} because all held-out ROC AUC values "
+            "were null; Logistic Regression is preferred in ties."
+        )
+    if tied_for_best:
+        return (
+            f"Selected {selected_model_type} because it tied for best held-out "
+            f"ROC AUC ({selected_auc:.6f}); Logistic Regression is preferred in ties."
+        )
+    return (
+        f"Selected {selected_model_type} because it had the highest held-out "
+        f"ROC AUC ({selected_auc:.6f})."
+    )
+
+
+def build_predictions(
+    data_frame: pd.DataFrame,
+    probabilities: pd.Series,
+    model_version: str,
+) -> pd.DataFrame:
+    """Build the dashboard-ready prediction output."""
+    predictions = data_frame[
+        [
+            "code_module",
+            "code_presentation",
+            "id_student",
+            "prediction_day",
+            "split",
+            TARGET_COLUMN,
+        ]
+    ].copy()
+    predictions[TARGET_COLUMN] = target_to_binary(predictions[TARGET_COLUMN])
+    predictions["predicted_withdrawal_probability"] = probabilities.round(6)
+    predictions["predicted_risk_band"] = predictions[
+        "predicted_withdrawal_probability"
+    ].map(probability_to_risk_band)
+    predictions["model_version"] = model_version
+    return predictions[PREDICTION_COLUMNS]
+
+
+def empty_feature_importance_frame() -> pd.DataFrame:
+    """Return an empty feature importance frame with stable column dtypes."""
+    return pd.DataFrame(
+        {
+            "feature": pd.Series(dtype="str"),
+            "importance_type": pd.Series(dtype="str"),
+            "importance_value": pd.Series(dtype="float64"),
+            "abs_importance_value": pd.Series(dtype="float64"),
+            "model_version": pd.Series(dtype="str"),
+        }
+    )
+
+
+def extract_feature_importance(
+    model: Pipeline,
+    spec: ModelSpec,
+    warnings: list[str],
+) -> pd.DataFrame:
+    """Extract transformed feature importance from the selected model."""
+    try:
+        feature_names = model.named_steps["preprocessor"].get_feature_names_out()
+        estimator = model.named_steps["model"]
+        if spec.importance_type == "coefficient":
+            importance_values = estimator.coef_[0]
+        elif spec.importance_type == "gini_importance":
+            importance_values = estimator.feature_importances_
+        else:
+            raise ValueError(f"Unsupported importance type: {spec.importance_type}")
+    except (AttributeError, KeyError, IndexError, ValueError) as exc:
+        warnings.append(f"Feature importance could not be extracted: {exc}")
+        return empty_feature_importance_frame()
+
+    importance = pd.DataFrame(
+        {
+            "feature": feature_names,
+            "importance_type": spec.importance_type,
+            "importance_value": importance_values,
+        }
+    )
+    importance["abs_importance_value"] = importance["importance_value"].abs()
+    importance["model_version"] = spec.model_version
+    return importance.sort_values("abs_importance_value", ascending=False)[
+        FEATURE_IMPORTANCE_COLUMNS
+    ]
+
+
+def build_model_comparison(
+    results: list[dict],
+    selected_result: dict,
+    selection_reason: str,
+) -> pd.DataFrame:
+    """Build one comparison row per evaluated model candidate."""
+    rows = []
+    for result in results:
+        metrics = result["metrics"]
+        row = {
+            column: metrics.get(column)
+            for column in MODEL_COMPARISON_COLUMNS
+            if column not in {"selected_model", "selection_reason"}
+        }
+        row["selected_model"] = result is selected_result
+        row["selection_reason"] = selection_reason if result is selected_result else ""
+        rows.append(row)
+    return pd.DataFrame(rows, columns=MODEL_COMPARISON_COLUMNS)
+
+
+def metrics_table_frame(metrics: dict) -> pd.DataFrame:
+    """Build a one-row metrics frame with dashboard-friendly scalar values."""
+    table_metrics = metrics.copy()
+    table_metrics["warnings"] = "; ".join(table_metrics.get("warnings", []))
+    return pd.DataFrame([table_metrics])
+
+
+def write_runtime_outputs(
+    predictions: pd.DataFrame,
+    metrics: dict,
+    feature_importance: pd.DataFrame,
+    model_comparison: pd.DataFrame,
+    predictions_output: Path,
+    metrics_output: Path,
+    feature_importance_output: Path,
+    model_comparison_output: Path,
+) -> None:
+    """Write local runtime prediction, metrics, and comparison artifacts."""
+    predictions_output.parent.mkdir(parents=True, exist_ok=True)
+    metrics_output.parent.mkdir(parents=True, exist_ok=True)
+    feature_importance_output.parent.mkdir(parents=True, exist_ok=True)
+    model_comparison_output.parent.mkdir(parents=True, exist_ok=True)
+
+    predictions.to_csv(predictions_output, index=False)
+    metrics_output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    feature_importance.to_csv(feature_importance_output, index=False)
+    model_comparison.to_csv(model_comparison_output, index=False)
+
+
+def write_duckdb_serving_tables(
+    duckdb_path: Path,
+    predictions: pd.DataFrame,
+    metrics: dict,
+    feature_importance: pd.DataFrame,
+    model_comparison: pd.DataFrame,
+) -> None:
+    """Create or replace dashboard-ready ML serving tables in DuckDB."""
+    frames_to_write = [
+        (
+            "ml_withdrawal_predictions_frame",
+            SERVING_TABLES["predictions"],
+            predictions,
+        ),
+        (
+            "ml_withdrawal_metrics_frame",
+            SERVING_TABLES["metrics"],
+            metrics_table_frame(metrics),
+        ),
+        (
+            "ml_withdrawal_feature_importance_frame",
+            SERVING_TABLES["feature_importance"],
+            feature_importance,
+        ),
+        (
+            "ml_withdrawal_model_comparison_frame",
+            SERVING_TABLES["model_comparison"],
+            model_comparison,
+        ),
+    ]
+
+    with duckdb.connect(str(duckdb_path)) as connection:
+        for frame_name, table_name, data_frame in frames_to_write:
+            connection.register(frame_name, data_frame)
+            connection.execute(
+                f"create or replace table {table_name} as select * from {frame_name}"
+            )
+            connection.unregister(frame_name)
+
+
+def main() -> None:
+    """Train, compare, and serve leakage-safe withdrawal prediction models."""
+    args = parse_args()
+    project_root = get_project_root()
+    duckdb_path = resolve_project_path(project_root, args.duckdb_path)
+    predictions_output = resolve_project_path(project_root, args.predictions_output)
+    metrics_output = resolve_project_path(project_root, args.metrics_output)
+    feature_importance_output = resolve_project_path(
+        project_root,
+        args.feature_importance_output,
+    )
+    model_comparison_output = resolve_project_path(
+        project_root,
+        args.model_comparison_output,
+    )
+
+    data = load_feature_mart(duckdb_path)
+    require_columns(data)
+    data[TARGET_COLUMN] = target_to_binary(data[TARGET_COLUMN])
+    data = assign_temporal_split(data)
+
+    prediction_days = sorted(data["prediction_day"].dropna().unique())
+    if len(prediction_days) != 1:
+        raise ValueError("Expected exactly one prediction_day in the feature mart.")
+    prediction_day = int(prediction_days[0])
+
+    feature_columns = select_feature_columns(data)
+    numeric_columns, categorical_columns = split_feature_types(data, feature_columns)
+    data = prepare_categorical_features(data, categorical_columns)
+
+    train_data = data[data["split"] == "train"].copy()
+    test_data = data[data["split"] == "test"].copy()
+    generated_at = utc_timestamp()
+    model_results = [
+        fit_and_evaluate_model(
+            spec=spec,
+            numeric_columns=numeric_columns,
+            categorical_columns=categorical_columns,
+            feature_columns=feature_columns,
+            train_data=train_data,
+            test_data=test_data,
+            data=data,
+            prediction_day=prediction_day,
+            generated_at=generated_at,
+        )
+        for spec in get_model_specs()
+    ]
+
+    selected_result = select_best_model(model_results)
+    selection_reason = build_selection_reason(selected_result, model_results)
+    selected_spec = selected_result["spec"]
+    selected_metrics = selected_result["metrics"].copy()
+    selected_metrics["warnings"] = list(selected_metrics.get("warnings", []))
+    selected_metrics["selected_model"] = True
+    selected_metrics["selection_reason"] = selection_reason
+
+    feature_importance = extract_feature_importance(
+        model=selected_result["model"],
+        spec=selected_spec,
+        warnings=selected_metrics["warnings"],
+    )
+    predictions = build_predictions(
+        data_frame=data,
+        probabilities=selected_result["all_probabilities"],
+        model_version=selected_spec.model_version,
+    )
+    model_comparison = build_model_comparison(
+        results=model_results,
+        selected_result=selected_result,
+        selection_reason=selection_reason,
+    )
+
+    write_runtime_outputs(
         predictions=predictions,
-        metrics=metrics,
+        metrics=selected_metrics,
         feature_importance=feature_importance,
+        model_comparison=model_comparison,
         predictions_output=predictions_output,
         metrics_output=metrics_output,
         feature_importance_output=feature_importance_output,
+        model_comparison_output=model_comparison_output,
+    )
+    write_duckdb_serving_tables(
+        duckdb_path=duckdb_path,
+        predictions=predictions,
+        metrics=selected_metrics,
+        feature_importance=feature_importance,
+        model_comparison=model_comparison,
     )
     print(
-        "Wrote withdrawal model predictions, metrics, and feature importance "
-        f"for {len(predictions):,} student-module attempts."
+        "Wrote withdrawal model predictions, metrics, feature importance, "
+        "model comparison, and DuckDB serving tables for "
+        f"{len(predictions):,} student-module attempts. Selected "
+        f"{selected_spec.model_type}."
     )
 
 
