@@ -23,7 +23,16 @@ ML_TABLES = {
     "metrics": "ml_withdrawal_metrics",
     "feature_importance": "ml_withdrawal_feature_importance",
     "model_comparison": "ml_withdrawal_model_comparison",
+    "roc_curve": "ml_withdrawal_roc_curve",
+    "pr_curve": "ml_withdrawal_pr_curve",
 }
+ML_CORE_TABLE_KEYS = {
+    "predictions",
+    "metrics",
+    "feature_importance",
+    "model_comparison",
+}
+ML_CURVE_TABLE_KEYS = {"roc_curve", "pr_curve"}
 
 EXPECTED_COLUMNS = {
     "student_module": [
@@ -105,6 +114,22 @@ EXPECTED_ML_COLUMNS = {
         "recall",
         "f1",
         "accuracy",
+    ],
+    "roc_curve": [
+        "model_type",
+        "model_version",
+        "split",
+        "threshold",
+        "false_positive_rate",
+        "true_positive_rate",
+    ],
+    "pr_curve": [
+        "model_type",
+        "model_version",
+        "split",
+        "threshold",
+        "precision",
+        "recall",
     ],
 }
 
@@ -1086,6 +1111,69 @@ def missing_ml_tables_message(missing_tables: list[str], load_error: str = ""):
     )
 
 
+def build_ml_curve_missing_message(
+    missing_tables: list[str],
+    load_error: str = "",
+):
+    """Render a clear message when ROC/PR curve serving tables are missing."""
+    missing_text = ", ".join(missing_tables)
+    details = f" Missing tables: {missing_text}." if missing_text else ""
+    error_text = f" DuckDB read error: {load_error}" if load_error else ""
+    return html.Div(
+        [
+            html.Strong("ROC/PR curve tables are not available."),
+            html.Div(
+                [
+                    "Run ",
+                    html.Code("python ml/train_withdrawal_model.py"),
+                    " to regenerate ML serving tables.",
+                    details,
+                    error_text,
+                ],
+                style={"marginTop": "0.35rem"},
+            ),
+        ],
+        style={
+            "border": f"1px solid {DASHBOARD_COLORS['border']}",
+            "borderRadius": "8px",
+            "backgroundColor": DASHBOARD_COLORS["surface"],
+            "color": DASHBOARD_COLORS["muted"],
+            "padding": "1rem",
+            "marginBottom": "1rem",
+        },
+    )
+
+
+def build_ml_curve_interpretation() -> html.Div:
+    """Render concise interpretation text for held-out curve diagnostics."""
+    return html.Div(
+        [
+            html.Ul(
+                [
+                    html.Li(
+                        "ROC curve summarizes ranking performance across "
+                        "classification thresholds."
+                    ),
+                    html.Li(
+                        "Precision-Recall curve is especially useful because "
+                        "future withdrawals are the minority class."
+                    ),
+                    html.Li(
+                        "These are held-out diagnostics for the selected model, "
+                        "not causal or production-monitoring evidence."
+                    ),
+                ],
+                style={
+                    "color": DASHBOARD_COLORS["muted"],
+                    "lineHeight": "1.45",
+                    "marginTop": 0,
+                },
+            )
+        ],
+        style={"marginTop": "0.25rem"},
+    )
+
+
 def build_ml_status(metrics: pd.DataFrame):
     """Render selected-model context from the metrics serving table."""
     metric_row = selected_metric_row(metrics)
@@ -1225,6 +1313,127 @@ def filter_ml_predictions(
     if not test_rows.empty:
         return test_rows
     return filtered
+
+
+def filter_test_split(data_frame: pd.DataFrame) -> pd.DataFrame:
+    """Use held-out test rows when a split column is available."""
+    if data_frame.empty or "split" not in data_frame.columns:
+        return data_frame
+
+    test_rows = data_frame[data_frame["split"].astype(str).str.lower() == "test"]
+    if not test_rows.empty:
+        return test_rows
+    return data_frame
+
+
+def selected_positive_rate_test(metrics: pd.DataFrame) -> float | None:
+    """Return selected-model held-out positive rate when available."""
+    metric_row = selected_metric_row(metrics)
+    if not metric_row:
+        return None
+
+    positive_rate = pd.to_numeric(
+        pd.Series([metric_row.get("positive_rate_test")]),
+        errors="coerce",
+    ).iloc[0]
+    if pd.isna(positive_rate):
+        return None
+    return float(positive_rate)
+
+
+def build_ml_roc_curve_figure(roc_curve_data: pd.DataFrame):
+    """Build the selected-model held-out ROC curve from serving table rows."""
+    required_columns = {"false_positive_rate", "true_positive_rate"}
+    if roc_curve_data.empty or not required_columns.issubset(roc_curve_data.columns):
+        return empty_figure("No held-out ROC curve data available")
+
+    chart_data = filter_test_split(roc_curve_data).copy()
+    chart_data["false_positive_rate"] = pd.to_numeric(
+        chart_data["false_positive_rate"],
+        errors="coerce",
+    )
+    chart_data["true_positive_rate"] = pd.to_numeric(
+        chart_data["true_positive_rate"],
+        errors="coerce",
+    )
+    chart_data = chart_data.dropna(subset=["false_positive_rate", "true_positive_rate"])
+    if chart_data.empty:
+        return empty_figure("No held-out ROC curve data available")
+
+    chart_data = chart_data.sort_values("false_positive_rate")
+    figure = px.line(
+        chart_data,
+        x="false_positive_rate",
+        y="true_positive_rate",
+        title="Held-out ROC Curve",
+        labels={
+            "false_positive_rate": "False Positive Rate (held-out test set)",
+            "true_positive_rate": "True Positive Rate (held-out test set)",
+        },
+        color_discrete_sequence=[DASHBOARD_COLORS["primary"]],
+    )
+    figure.add_shape(
+        type="line",
+        x0=0,
+        y0=0,
+        x1=1,
+        y1=1,
+        line={"color": DASHBOARD_COLORS["muted"], "dash": "dash", "width": 1},
+    )
+    figure.update_xaxes(range=[0, 1])
+    figure.update_yaxes(range=[0, 1])
+    return apply_chart_layout(figure)
+
+
+def build_ml_pr_curve_figure(pr_curve_data: pd.DataFrame, metrics: pd.DataFrame):
+    """Build the selected-model held-out Precision-Recall curve."""
+    required_columns = {"precision", "recall"}
+    if pr_curve_data.empty or not required_columns.issubset(pr_curve_data.columns):
+        return empty_figure("No held-out Precision-Recall curve data available")
+
+    chart_data = filter_test_split(pr_curve_data).copy()
+    chart_data["precision"] = pd.to_numeric(chart_data["precision"], errors="coerce")
+    chart_data["recall"] = pd.to_numeric(chart_data["recall"], errors="coerce")
+    chart_data = chart_data.dropna(subset=["precision", "recall"])
+    if chart_data.empty:
+        return empty_figure("No held-out Precision-Recall curve data available")
+
+    chart_data = chart_data.sort_values("recall")
+    figure = px.line(
+        chart_data,
+        x="recall",
+        y="precision",
+        title="Held-out Precision-Recall Curve",
+        labels={
+            "recall": "Recall (held-out test set)",
+            "precision": "Precision (held-out test set)",
+        },
+        color_discrete_sequence=[DASHBOARD_COLORS["secondary"]],
+    )
+
+    positive_rate = selected_positive_rate_test(metrics)
+    if positive_rate is not None:
+        figure.add_shape(
+            type="line",
+            x0=0,
+            y0=positive_rate,
+            x1=1,
+            y1=positive_rate,
+            line={"color": DASHBOARD_COLORS["muted"], "dash": "dash", "width": 1},
+        )
+        figure.add_annotation(
+            x=1,
+            y=positive_rate,
+            text="Test positive rate",
+            showarrow=False,
+            xanchor="right",
+            yanchor="bottom",
+            font={"color": DASHBOARD_COLORS["muted"], "size": 11},
+        )
+
+    figure.update_xaxes(range=[0, 1])
+    figure.update_yaxes(range=[0, 1])
+    return apply_chart_layout(figure)
 
 
 def build_ml_risk_band_distribution_figure(predictions: pd.DataFrame):
@@ -1445,14 +1654,33 @@ def build_ml_outputs(
     """Build all ML dashboard outputs from precomputed serving tables."""
     missing_tables = ml_data.get("missing_tables", [])
     load_error = ml_data.get("load_error", "")
-    if missing_tables:
+    missing_core_tables = [
+        table_name
+        for table_key, table_name in ML_TABLES.items()
+        if table_key in ML_CORE_TABLE_KEYS and table_name in missing_tables
+    ]
+    missing_curve_tables = [
+        table_name
+        for table_key, table_name in ML_TABLES.items()
+        if table_key in ML_CURVE_TABLE_KEYS and table_name in missing_tables
+    ]
+
+    if missing_core_tables:
+        curve_status = (
+            build_ml_curve_missing_message(missing_curve_tables, load_error)
+            if missing_curve_tables
+            else build_ml_curve_interpretation()
+        )
         return (
-            missing_ml_tables_message(missing_tables, load_error),
+            missing_ml_tables_message(missing_core_tables, load_error),
             [],
             html.Div(
                 "Model comparison is unavailable until ML serving tables exist.",
                 style={"color": DASHBOARD_COLORS["muted"], "padding": "1rem"},
             ),
+            curve_status,
+            empty_figure("ROC/PR curve tables are not available"),
+            empty_figure("ROC/PR curve tables are not available"),
             empty_figure("ML predictions are not available"),
             empty_figure("ML prediction outcomes are not available"),
             empty_figure("ML feature importance is not available"),
@@ -1469,11 +1697,29 @@ def build_ml_outputs(
         code_module,
         code_presentation,
     )
+    curve_status = (
+        build_ml_curve_missing_message(missing_curve_tables, load_error)
+        if missing_curve_tables
+        else build_ml_curve_interpretation()
+    )
+    roc_curve_figure = (
+        empty_figure("ROC/PR curve tables are not available")
+        if missing_curve_tables
+        else build_ml_roc_curve_figure(tables["roc_curve"])
+    )
+    pr_curve_figure = (
+        empty_figure("ROC/PR curve tables are not available")
+        if missing_curve_tables
+        else build_ml_pr_curve_figure(tables["pr_curve"], tables["metrics"])
+    )
 
     return (
         build_ml_status(tables["metrics"]),
         build_ml_kpi_cards(tables["metrics"]),
         build_ml_model_comparison_table(tables["model_comparison"]),
+        curve_status,
+        roc_curve_figure,
+        pr_curve_figure,
         build_ml_risk_band_distribution_figure(scoped_predictions),
         build_ml_withdrawal_rate_by_risk_band_figure(scoped_predictions),
         build_ml_feature_importance_figure(tables["feature_importance"]),
@@ -1755,6 +2001,14 @@ def build_ml_withdrawal_risk_tab() -> html.Div:
                             "marginBottom": "1rem",
                         },
                     ),
+                    html.Div(id="ml-curve-status"),
+                    html.Div(
+                        [
+                            dcc.Graph(id="ml-roc-curve"),
+                            dcc.Graph(id="ml-pr-curve"),
+                        ],
+                        style=GRAPH_GRID_STYLE,
+                    ),
                     html.Div(
                         [
                             dcc.Graph(id="ml-risk-band-distribution"),
@@ -1869,6 +2123,9 @@ def update_presentation_options(code_module: str | None):
     Output("ml-serving-status", "children"),
     Output("ml-kpi-cards", "children"),
     Output("ml-model-comparison-table", "children"),
+    Output("ml-curve-status", "children"),
+    Output("ml-roc-curve", "figure"),
+    Output("ml-pr-curve", "figure"),
     Output("ml-risk-band-distribution", "figure"),
     Output("ml-withdrawal-rate-by-risk-band", "figure"),
     Output("ml-feature-importance", "figure"),
