@@ -1,85 +1,80 @@
 # Learning Analytics Intelligence Platform
 
-The Learning Analytics Intelligence Platform is an analytics engineering and BI
-portfolio project built on OULAD data. It creates a local DuckDB and dbt-powered
-analytics platform for online learning engagement, assessment performance, course
-health, withdrawal patterns, and rule-based student-success risk signals.
+The Learning Analytics Intelligence Platform is a local analytics engineering,
+BI, and leakage-safe ML portfolio project built on OULAD data. It creates a
+DuckDB and dbt-powered learning analytics workflow for course engagement,
+assessment performance, student-success indicators, and day-30 withdrawal-risk
+model outputs.
 
-The project is designed for transparent learning analytics: raw data is
-validated and modeled into documented dbt marts, and the dashboard consumes only
-approved mart tables rather than raw, staging, or intermediate data.
+The project is designed for transparent analytics work: raw data is validated,
+modeled into documented dbt marts, surfaced in a Dash dashboard, and extended
+with precomputed ML serving tables. Dash reads approved DuckDB tables and does
+not train models.
 
-## Key Business Questions
+## Key Questions
 
 - How does learner engagement evolve across course presentations?
 - How are engagement patterns associated with withdrawal outcomes?
 - Do low-engagement students score lower?
-- Which anonymized student-module attempts show multiple rule-based risk signals?
-- How can course teams monitor engagement, assessment performance, and
-  student-success indicators?
+- Which anonymized student-module attempts show multiple rule-based risk
+  signals?
+- How do leakage-safe day-30 ML withdrawal-risk outputs compare across a
+  baseline and challenger model?
 
-## Current Features
+## End-To-End Workflow
 
-- Raw OULAD file validation for required files and schemas.
-- Local DuckDB warehouse for reproducible analytics development.
-- dbt staging, intermediate, and mart layers using dbt-duckdb.
-- Documented and tested dbt models.
-- Dash and Plotly dashboard for course and student-success analytics.
-- Student-success feature mart combining demographics, outcomes, engagement,
-  assessment behavior, and rule-based risk indicators.
-- Rule-based risk segmentation for analytical monitoring.
-- Dashboard reads only approved dbt mart tables.
+The repository includes a full local analytics workflow:
+
+- Raw OULAD validation for required files and schemas.
+- Raw-to-DuckDB ingestion into a local warehouse.
+- dbt staging, intermediate, and mart modeling with dbt-duckdb.
+- dbt tests and documentation for governed mart tables.
+- Dash and Plotly dashboard with four analytical tabs.
 - GitHub Actions CI for Python syntax, lint, formatting, and dbt parse checks.
-- Airflow DAG for local pipeline orchestration.
-- Airflow DAG tasks orchestrate raw validation, DuckDB loading, `dbt run`, and
-  `dbt test`.
-- Governed aggregate insight-card generator for future LLM-assisted
-  interpretation.
+- Airflow-style orchestration DAG for local pipeline steps.
+- Governed insight-card generator for deterministic aggregate summaries.
+- Leakage-safe ML workflow for day-30 withdrawal-risk prediction outputs.
 
 ## Architecture
 
 ```text
 OULAD raw CSVs
--> Airflow DAG orchestration
--> Python validation
+-> raw data validation
 -> DuckDB raw tables
 -> dbt sources
 -> dbt staging models
 -> dbt intermediate models
 -> dbt marts
+-> leakage-safe ML feature mart
+-> Python ML training/scoring outside Dash
+-> DuckDB ML serving tables
 -> Dash dashboard
 -> governed aggregate insight cards
--> future optional LLM-assisted summaries
 ```
 
-The Airflow DAG is implemented under `orchestration/dags/` and is intended for
-local/runtime orchestration of the existing pipeline steps.
+The Airflow-style DAG is implemented under `orchestration/dags/` and
+orchestrates local validation, DuckDB loading, `dbt run`, and `dbt test`.
 
-The governed aggregate insight-card generator is implemented under `insights/`
-and produces deterministic JSON cards for approved marts. External LLM/API-based
-summary generation is planned future work and is not currently implemented.
+The governed insight-card generator is implemented under `insights/` and writes
+deterministic aggregate JSON cards from approved marts.
 
 ## Data Source
 
 This project uses the Open University Learning Analytics Dataset (OULAD). Raw
 CSV files are stored locally under `data/raw/` and are not committed to Git.
+OULAD student IDs are anonymized identifiers.
 
-## dbt Model Layers
+## dbt Models
+
+The dbt project organizes the warehouse into:
 
 - `staging`: typed and standardized source-aligned views.
-- `intermediate`: reusable joins and learning activity logic.
+- `intermediate`: reusable joins and learning-activity logic.
 - `marts`: dashboard-ready business tables.
-- `student-success marts`: engagement, assessment, and rule-based risk feature
-  tables for student-success analysis.
+- student-success and ML marts for rule-based indicators and leakage-safe
+  model features.
 
-Current dbt status:
-
-- 16 dbt models.
-- 127 dbt data tests.
-- 7 raw sources.
-- Student-success feature mart documented and tested.
-
-Important implemented mart models include:
+Important mart models include:
 
 - `dim_student_module`
 - `fct_course_engagement_daily`
@@ -87,55 +82,94 @@ Important implemented mart models include:
 - `fct_student_engagement_summary`
 - `fct_student_assessment_summary`
 - `mart_student_success_features`
+- `mart_withdrawal_prediction_features`
 
 ## Dashboard
 
-The Dash dashboard reads from approved dbt mart tables in DuckDB and includes:
+The Dash dashboard reads from local DuckDB mart and ML serving tables. It uses
+global module and presentation filters and has four tabs:
 
-- Module and presentation filters.
-- Enrollment and withdrawal KPIs.
-- Engagement trends.
-- Assessment performance.
-- Final-result distribution.
-- Risk-band distribution.
-- Withdrawal rate by risk band.
-- Engagement patterns vs withdrawal rate.
-- Low engagement vs average score.
-- Highest-risk anonymized student-module attempts table.
+- Overview
+- Engagement & Assessment
+- Student Success Signals
+- ML Withdrawal Risk
 
-The dashboard is organized into Course Overview, Engagement & Assessment
-Trends, Learning Journey Funnel, Student Success Signals, and Highest-Risk
-Student-Module Attempts sections.
+Dashboard content includes:
 
-The dashboard directly supports these student-success questions:
+- KPI cards.
+- Final result distribution with counts and percentages.
+- Learning journey funnel with counts and percentages.
+- Engagement and assessment trends.
+- Rule-based student-success signals.
+- Highest-risk anonymized student-module attempts from rule-based indicators.
+- Precomputed ML withdrawal-risk results.
+- Model comparison table.
+- Selected-model feature importance.
+- Held-out ROC and Precision-Recall diagnostic charts.
 
-- How do engagement patterns relate to withdrawal?
-- Did low-engagement students score lower?
-- Which anonymized student-module attempts show multiple risk signals?
+Rule-based risk bands are descriptive indicators. ML predicted risk bands are
+separate model outputs generated by the ML workflow. Neither the rule-based
+signals nor the ML predictions should be interpreted as causal evidence.
 
 ## Screenshots
 
-### Dashboard Overview
+### Overview Tab
 
-The overview shows module/presentation filtering, course-level KPIs, and the
-main engagement and assessment monitoring layout.
+![Overview tab](docs/images/dashboard-overview-tab.png)
 
-![Dashboard overview](docs/images/dashboard-overview.png)
+### Engagement & Assessment Tab
 
-### Learning Journey Funnel
+![Engagement and assessment tab](docs/images/dashboard-engagement-assessment-tab.png)
 
-The funnel summarizes how the selected cohort moves from enrollment to VLE
-activity, assessment submission, and successful outcome.
+### Student Success Signals Tab
 
-![Learning journey funnel](docs/images/learning-journey-funnel.png)
+![Student success signals tab](docs/images/dashboard-student-success-tab.png)
 
-### Student Success Signals
+### ML Withdrawal Risk Tab
 
-The student-success section shows rule-based risk segmentation, withdrawal-rate
-comparisons, engagement/score patterns, and the highest-risk anonymized
-student-module attempts.
+![ML withdrawal risk tab](docs/images/dashboard-ml-withdrawal-risk-tab.png)
 
-![Student success signals](docs/images/student-success-signals.png)
+## ML Workflow
+
+The ML workflow is leakage-safe and runs outside Dash:
+
+- dbt creates the feature mart `mart_withdrawal_prediction_features`.
+- Prediction point: course day 30.
+- Target: withdrawal after day 30.
+- Population: students still enrolled after day 30.
+- Features use only information available up to day 30.
+- Python trains and scores models outside the dashboard.
+- Logistic Regression is the baseline model.
+- Random Forest is the challenger model.
+- The selected model is chosen by held-out ROC AUC, with Logistic Regression
+  preferred in ties.
+- Model comparison, selected-model feature importance, held-out ROC curve, and
+  held-out Precision-Recall curve outputs are stored.
+- Outputs are written to DuckDB ML serving tables.
+- The dashboard reads the DuckDB serving tables and does not train models.
+
+Current observed run, stated conservatively:
+
+- `RandomForestClassifier` was selected by held-out ROC AUC.
+- Held-out ROC AUC was approximately 0.648.
+- Average precision was approximately 0.295.
+- Precision was approximately 0.301.
+- Recall was approximately 0.421.
+- F1 was approximately 0.351.
+- Future-withdrawal rate in the held-out test set was approximately 18.3%.
+
+Observed trade-off: Logistic Regression remained useful as an interpretable
+baseline and had higher recall/F1 in the observed run. Random Forest was
+selected because it had the higher held-out ROC AUC.
+
+DuckDB ML serving tables:
+
+- `ml_withdrawal_predictions`
+- `ml_withdrawal_metrics`
+- `ml_withdrawal_feature_importance`
+- `ml_withdrawal_model_comparison`
+- `ml_withdrawal_roc_curve`
+- `ml_withdrawal_pr_curve`
 
 ## How To Run Locally
 
@@ -163,6 +197,18 @@ dbt test --profiles-dir .
 cd ..
 ```
 
+Generate governed insight cards:
+
+```bash
+python insights/generate_insight_cards.py
+```
+
+Train, score, and write ML serving tables:
+
+```bash
+python ml/train_withdrawal_model.py
+```
+
 Run the dashboard:
 
 ```bash
@@ -175,61 +221,44 @@ Then open:
 http://127.0.0.1:8050/
 ```
 
-### Optional Airflow Orchestration
+## Optional Airflow-Style Orchestration
 
-The repository includes an Airflow DAG at
-`orchestration/dags/laip_pipeline_dag.py`. The DAG orchestrates raw validation,
-DuckDB loading, `dbt run`, and `dbt test`.
+The repository includes an Airflow-style DAG at
+`orchestration/dags/laip_pipeline_dag.py`. The DAG represents local pipeline
+orchestration for raw validation, DuckDB loading, `dbt run`, and `dbt test`.
 
-Airflow is not installed in the main Conda environment yet. To use the DAG, an
+Airflow is not installed in the main Conda environment. To use the DAG, an
 Airflow runtime should set `LAIP_PROJECT_ROOT` to the project root.
-
-### Optional: Generate Governed Insight Cards
-
-After the DuckDB warehouse and dbt marts exist, generate deterministic aggregate
-cards:
-
-```bash
-python insights/generate_insight_cards.py
-```
-
-The script writes `data/processed/insight_cards.json`. This output contains
-aggregate cards only, is a runtime artifact, and should not be committed.
 
 ## Repository Hygiene
 
 - Raw CSV files are ignored.
 - DuckDB warehouse files are ignored.
+- Generated runtime files under `data/processed/` are ignored.
 - dbt `target/` and `logs/` artifacts are ignored.
 - `.env` files are ignored.
 - Only code, configuration, and documentation are committed.
 - GitHub Actions CI runs syntax, lint, formatting, and dbt parse checks.
-- CI intentionally does not run ingestion, `dbt run`, `dbt test`, or the
-  dashboard because raw data and DuckDB warehouse files are ignored.
+- CI intentionally does not run ingestion, `dbt run`, `dbt test`, ML training,
+  or the dashboard because raw data and local DuckDB warehouse files are
+  ignored.
 
-## LLM Insight Governance
+## Limitations
 
-Governed aggregate insight-card generation is implemented as a deterministic
-prototype. External LLM/API-based narrative generation is not currently
-implemented as a production feature. Future LLM components must consume only
-approved aggregate marts, generated aggregate cards, or dashboard summary tables.
+- This is a local DuckDB project, not cloud-deployed.
+- The Airflow-style DAG is included, but a deployed scheduler is not part of
+  the main environment.
+- The ML workflow is a leakage-aware baseline/challenger workflow, not a
+  production model.
+- ROC and Precision-Recall diagnostics are held-out diagnostics, not causal
+  evidence.
+- Rule-based risk bands are descriptive indicators, not ML predictions.
+- OULAD student IDs are anonymized.
+- Dashboard and ML outputs depend on locally generated DuckDB tables.
 
-## Current Limitations
+## Portfolio Positioning
 
-- Risk bands are rule-based analytical indicators, not validated predictive ML
-  outputs.
-- The application is not deployed yet.
-- Airflow DAG exists, but full Airflow runtime setup is not included in the main
-  Conda environment yet.
-- Governed aggregate insight-card generation is implemented.
-- External LLM/API-based narrative generation is not implemented.
-- Leakage-aware ML withdrawal/dropout prediction is planned but not implemented
-  yet.
-- Future work may include deployment, full Airflow runtime setup, optional
-  LLM-assisted summaries, and leakage-aware ML modeling.
-
-## Suggested Portfolio Positioning
-
-This project demonstrates analytics engineering, dbt modeling, BI dashboarding,
-data quality testing, CI, Airflow orchestration, learning analytics, and
-governed aggregate insight cards for responsible future AI-assisted analytics.
+This project demonstrates analytics engineering, dbt modeling, BI
+dashboarding, data quality testing, CI, local orchestration design, governed
+aggregate insight generation, and a leakage-safe ML serving workflow for
+responsible learning analytics.
