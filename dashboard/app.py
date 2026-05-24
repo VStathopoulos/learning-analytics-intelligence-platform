@@ -61,6 +61,30 @@ EXPECTED_COLUMNS = {
 
 RISK_BAND_ORDER = ["Low", "Medium", "High"]
 RISK_BAND_SORT_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+DASHBOARD_COLORS = {
+    "primary": "#2563eb",
+    "secondary": "#0f766e",
+    "success": "#16a34a",
+    "warning": "#d97706",
+    "danger": "#dc2626",
+    "muted": "#64748b",
+    "background": "#f8fafc",
+    "surface": "#ffffff",
+    "border": "#d9e2ec",
+    "grid": "#e5e7eb",
+    "text": "#1f2933",
+}
+RISK_BAND_COLORS = {
+    "Low": DASHBOARD_COLORS["success"],
+    "Medium": DASHBOARD_COLORS["warning"],
+    "High": DASHBOARD_COLORS["danger"],
+}
+FINAL_RESULT_COLORS = {
+    "Distinction": DASHBOARD_COLORS["secondary"],
+    "Pass": DASHBOARD_COLORS["success"],
+    "Fail": DASHBOARD_COLORS["warning"],
+    "Withdrawn": DASHBOARD_COLORS["danger"],
+}
 STUDENT_RISK_COLUMNS = [
     "id_student",
     "code_module",
@@ -76,6 +100,12 @@ STUDENT_RISK_COLUMNS = [
     "submitted_assessments",
     "average_submission_delay_days",
 ]
+GRAPH_GRID_STYLE = {
+    "display": "grid",
+    "gridTemplateColumns": "repeat(auto-fit, minmax(360px, 1fr))",
+    "gap": "1rem",
+}
+SECTION_STYLE = {"marginTop": "1.5rem"}
 
 
 def load_mart_table(table_key: str) -> pd.DataFrame:
@@ -117,6 +147,35 @@ def dropdown_options(values: pd.Series) -> list[dict[str, str]]:
     return [{"label": str(value), "value": value} for value in clean_values]
 
 
+def apply_chart_layout(figure, hovermode: str = "closest"):
+    """Apply a consistent, lightweight dashboard chart style."""
+    figure.update_layout(
+        template="plotly_white",
+        paper_bgcolor=DASHBOARD_COLORS["surface"],
+        plot_bgcolor=DASHBOARD_COLORS["surface"],
+        font={"color": DASHBOARD_COLORS["text"], "size": 12},
+        title={"font": {"size": 18}, "x": 0.02, "xanchor": "left"},
+        margin={"l": 56, "r": 28, "t": 72, "b": 52},
+        hovermode=hovermode,
+        legend_title_text="",
+    )
+    figure.update_xaxes(
+        showgrid=False,
+        linecolor=DASHBOARD_COLORS["border"],
+        title_font={"size": 12},
+        tickfont={"size": 11},
+    )
+    figure.update_yaxes(
+        showgrid=True,
+        gridcolor=DASHBOARD_COLORS["grid"],
+        zeroline=False,
+        linecolor=DASHBOARD_COLORS["border"],
+        title_font={"size": 12},
+        tickfont={"size": 11},
+    )
+    return figure
+
+
 def empty_figure(message: str):
     """Build a consistent empty-state chart."""
     figure = px.scatter(title=message)
@@ -135,7 +194,30 @@ def empty_figure(message: str):
         ],
         plot_bgcolor="white",
     )
-    return figure
+    return apply_chart_layout(figure)
+
+
+def section_header(title: str, note: str) -> html.Div:
+    """Render a consistent dashboard section heading."""
+    return html.Div(
+        [
+            html.H2(
+                title,
+                style={
+                    "fontSize": "1.35rem",
+                    "margin": "0 0 0.35rem",
+                },
+            ),
+            html.P(
+                note,
+                style={
+                    "margin": "0 0 0.85rem",
+                    "color": DASHBOARD_COLORS["muted"],
+                    "lineHeight": "1.45",
+                },
+            ),
+        ]
+    )
 
 
 def format_number(value: float | int | None) -> str:
@@ -283,10 +365,10 @@ def kpi_card(label: str, value: str) -> html.Div:
             ),
         ],
         style={
-            "border": "1px solid #d9e2ec",
+            "border": f"1px solid {DASHBOARD_COLORS['border']}",
             "borderRadius": "8px",
             "padding": "1rem",
-            "backgroundColor": "white",
+            "backgroundColor": DASHBOARD_COLORS["surface"],
         },
     )
 
@@ -297,13 +379,15 @@ def build_clicks_figure(engagement: pd.DataFrame):
         return empty_figure("No engagement data available")
 
     chart_data = engagement.sort_values("activity_date")
-    return px.line(
+    figure = px.line(
         chart_data,
         x="activity_date",
         y="total_clicks",
-        title="Total Clicks Over Time",
-        labels={"activity_date": "Activity Date", "total_clicks": "Total Clicks"},
+        title="Daily Course Clicks",
+        labels={"activity_date": "Course Day", "total_clicks": "Total Clicks"},
+        color_discrete_sequence=[DASHBOARD_COLORS["primary"]],
     )
+    return apply_chart_layout(figure, hovermode="x unified")
 
 
 def build_active_students_figure(engagement: pd.DataFrame):
@@ -312,16 +396,18 @@ def build_active_students_figure(engagement: pd.DataFrame):
         return empty_figure("No active student data available")
 
     chart_data = engagement.sort_values("activity_date")
-    return px.line(
+    figure = px.line(
         chart_data,
         x="activity_date",
         y="active_students",
-        title="Active Students Over Time",
+        title="Daily Active Students",
         labels={
-            "activity_date": "Activity Date",
+            "activity_date": "Course Day",
             "active_students": "Active Students",
         },
+        color_discrete_sequence=[DASHBOARD_COLORS["secondary"]],
     )
+    return apply_chart_layout(figure, hovermode="x unified")
 
 
 def build_final_result_figure(students: pd.DataFrame):
@@ -334,13 +420,17 @@ def build_final_result_figure(students: pd.DataFrame):
         .size()
         .rename(columns={"size": "student_count"})
     )
-    return px.bar(
+    figure = px.bar(
         chart_data,
         x="final_result",
         y="student_count",
         title="Final Result Distribution",
         labels={"final_result": "Final Result", "student_count": "Students"},
+        color="final_result",
+        color_discrete_map=FINAL_RESULT_COLORS,
     )
+    figure.update_layout(showlegend=False)
+    return apply_chart_layout(figure)
 
 
 def build_assessment_score_figure(assessments: pd.DataFrame):
@@ -367,16 +457,81 @@ def build_assessment_score_figure(assessments: pd.DataFrame):
     if chart_data.empty:
         return empty_figure("No assessment score data available")
 
-    return px.bar(
+    figure = px.bar(
         chart_data,
         x="assessment_type",
         y="average_score",
-        title="Average Score By Assessment Type",
+        title="Average Assessment Score by Assessment Type",
         labels={
             "assessment_type": "Assessment Type",
             "average_score": "Average Score",
         },
+        color_discrete_sequence=[DASHBOARD_COLORS["primary"]],
     )
+    return apply_chart_layout(figure)
+
+
+def build_learning_journey_funnel_figure(
+    students: pd.DataFrame,
+    success_features: pd.DataFrame,
+):
+    """Build the selected cohort learning journey funnel."""
+    required_columns = {
+        "total_clicks",
+        "submitted_assessments",
+        "final_result",
+    }
+    if success_features.empty or not required_columns.issubset(
+        success_features.columns
+    ):
+        return empty_figure("No student-success data available for the funnel")
+
+    total_clicks = pd.to_numeric(success_features["total_clicks"], errors="coerce")
+    submitted_assessments = pd.to_numeric(
+        success_features["submitted_assessments"],
+        errors="coerce",
+    )
+    enrolled_students = len(students) if not students.empty else len(success_features)
+    active_students = int((total_clicks.fillna(0) > 0).sum())
+    submitted_students = int((submitted_assessments.fillna(0) > 0).sum())
+    passed_students = int(
+        success_features["final_result"].isin(["Pass", "Distinction"]).sum()
+    )
+
+    chart_data = pd.DataFrame(
+        {
+            "stage": [
+                "Enrolled students",
+                "Active in VLE",
+                "Submitted assessment",
+                "Passed or distinction",
+            ],
+            "student_count": [
+                enrolled_students,
+                active_students,
+                submitted_students,
+                passed_students,
+            ],
+        }
+    )
+
+    figure = px.funnel(
+        chart_data,
+        x="student_count",
+        y="stage",
+        title="Learning Journey Funnel",
+        labels={"stage": "Learning Journey Stage", "student_count": "Students"},
+        color="stage",
+        color_discrete_map={
+            "Enrolled students": DASHBOARD_COLORS["primary"],
+            "Active in VLE": DASHBOARD_COLORS["secondary"],
+            "Submitted assessment": DASHBOARD_COLORS["warning"],
+            "Passed or distinction": DASHBOARD_COLORS["success"],
+        },
+    )
+    figure.update_traces(texttemplate="%{value:,.0f}", textposition="inside")
+    figure.update_layout(showlegend=False)
+    return apply_chart_layout(figure)
 
 
 def build_withdrawal_by_declining_engagement_figure(success_features: pd.DataFrame):
@@ -414,15 +569,21 @@ def build_withdrawal_by_declining_engagement_figure(success_features: pd.DataFra
         grouped,
         x="engagement_pattern",
         y="withdrawal_rate",
-        title="Withdrawal Rate By Declining Engagement",
+        title="Withdrawal Rate by Declining Engagement",
         labels={
             "engagement_pattern": "Engagement Pattern",
             "withdrawal_rate": "Withdrawal Rate",
         },
         category_orders={"engagement_pattern": list(engagement_labels.values())},
+        color="engagement_pattern",
+        color_discrete_map={
+            "No declining engagement": DASHBOARD_COLORS["muted"],
+            "Declining engagement": DASHBOARD_COLORS["danger"],
+        },
     )
+    figure.update_layout(showlegend=False)
     figure.update_yaxes(ticksuffix="%")
-    return figure
+    return apply_chart_layout(figure)
 
 
 def build_score_by_low_engagement_figure(success_features: pd.DataFrame):
@@ -453,17 +614,24 @@ def build_score_by_low_engagement_figure(success_features: pd.DataFrame):
         "average_score"
     ].mean()
 
-    return px.bar(
+    figure = px.bar(
         grouped,
         x="engagement_group",
         y="average_score",
-        title="Average Assessment Score By Engagement Group",
+        title="Average Score by Engagement Group",
         labels={
             "engagement_group": "Engagement Group",
             "average_score": "Average Score",
         },
         category_orders={"engagement_group": list(engagement_labels.values())},
+        color="engagement_group",
+        color_discrete_map={
+            "Not low engagement": DASHBOARD_COLORS["secondary"],
+            "Low engagement": DASHBOARD_COLORS["danger"],
+        },
     )
+    figure.update_layout(showlegend=False)
+    return apply_chart_layout(figure)
 
 
 def build_risk_band_count_figure(success_features: pd.DataFrame):
@@ -487,14 +655,18 @@ def build_risk_band_count_figure(success_features: pd.DataFrame):
         .reset_index(name="student_count")
     )
 
-    return px.bar(
+    figure = px.bar(
         grouped,
         x="risk_band",
         y="student_count",
-        title="Student Count By Rule-Based Risk Band",
+        title="Student Count by Rule-Based Risk Band",
         labels={"risk_band": "Risk Band", "student_count": "Students"},
         category_orders={"risk_band": RISK_BAND_ORDER},
+        color="risk_band",
+        color_discrete_map=RISK_BAND_COLORS,
     )
+    figure.update_layout(showlegend=False)
+    return apply_chart_layout(figure)
 
 
 def build_withdrawal_by_risk_band_figure(success_features: pd.DataFrame):
@@ -528,12 +700,15 @@ def build_withdrawal_by_risk_band_figure(success_features: pd.DataFrame):
         grouped,
         x="risk_band",
         y="withdrawal_rate",
-        title="Withdrawal Rate By Rule-Based Risk Band",
+        title="Withdrawal Rate by Rule-Based Risk Band",
         labels={"risk_band": "Risk Band", "withdrawal_rate": "Withdrawal Rate"},
         category_orders={"risk_band": RISK_BAND_ORDER},
+        color="risk_band",
+        color_discrete_map=RISK_BAND_COLORS,
     )
+    figure.update_layout(showlegend=False)
     figure.update_yaxes(ticksuffix="%")
-    return figure
+    return apply_chart_layout(figure)
 
 
 def format_bool_label(value) -> str:
@@ -644,10 +819,10 @@ def build_student_risk_table(success_features: pd.DataFrame):
         style_header={
             "backgroundColor": "#f0f4f8",
             "fontWeight": "700",
-            "border": "1px solid #d9e2ec",
+            "border": f"1px solid {DASHBOARD_COLORS['border']}",
         },
         style_data={
-            "backgroundColor": "white",
+            "backgroundColor": DASHBOARD_COLORS["surface"],
             "border": "1px solid #e4e7eb",
         },
         style_data_conditional=[
@@ -677,70 +852,121 @@ app.layout = html.Div(
                 ),
                 html.P(
                     "OULAD dashboard powered by DuckDB and dbt marts.",
-                    style={"margin": "0.35rem 0 0", "color": "#52606d"},
+                    style={
+                        "margin": "0.35rem 0 0",
+                        "color": DASHBOARD_COLORS["muted"],
+                    },
                 ),
             ],
             style={"marginBottom": "1.5rem"},
         ),
-        html.Div(
+        html.Section(
             [
-                html.Div(
-                    [
-                        html.Label("Module", htmlFor="module-dropdown"),
-                        dcc.Dropdown(
-                            id="module-dropdown",
-                            options=module_options,
-                            value=initial_module,
-                            clearable=True,
-                            placeholder="Select module",
-                        ),
-                    ]
+                section_header(
+                    "Course Overview",
+                    "Filter the dashboard by module and presentation, then review "
+                    "the core enrollment, outcome, engagement, and high-risk KPIs.",
                 ),
                 html.Div(
                     [
-                        html.Label("Presentation", htmlFor="presentation-dropdown"),
-                        dcc.Dropdown(
-                            id="presentation-dropdown",
-                            clearable=True,
-                            placeholder="Select presentation",
+                        html.Div(
+                            [
+                                html.Label("Module", htmlFor="module-dropdown"),
+                                dcc.Dropdown(
+                                    id="module-dropdown",
+                                    options=module_options,
+                                    value=initial_module,
+                                    clearable=True,
+                                    placeholder="Select module",
+                                ),
+                            ]
                         ),
-                    ]
+                        html.Div(
+                            [
+                                html.Label(
+                                    "Presentation",
+                                    htmlFor="presentation-dropdown",
+                                ),
+                                dcc.Dropdown(
+                                    id="presentation-dropdown",
+                                    clearable=True,
+                                    placeholder="Select presentation",
+                                ),
+                            ]
+                        ),
+                    ],
+                    style={
+                        "display": "grid",
+                        "gridTemplateColumns": "repeat(auto-fit, minmax(240px, 1fr))",
+                        "gap": "1rem",
+                        "marginBottom": "1rem",
+                    },
+                ),
+                html.Div(
+                    id="kpi-cards",
+                    style={
+                        "display": "grid",
+                        "gridTemplateColumns": "repeat(auto-fit, minmax(180px, 1fr))",
+                        "gap": "1rem",
+                    },
                 ),
             ],
-            style={
-                "display": "grid",
-                "gridTemplateColumns": "repeat(auto-fit, minmax(240px, 1fr))",
-                "gap": "1rem",
-                "marginBottom": "1rem",
-            },
-        ),
-        html.Div(
-            id="kpi-cards",
-            style={
-                "display": "grid",
-                "gridTemplateColumns": "repeat(auto-fit, minmax(180px, 1fr))",
-                "gap": "1rem",
-                "marginBottom": "1.25rem",
-            },
-        ),
-        html.Div(
-            [
-                dcc.Graph(id="clicks-over-time"),
-                dcc.Graph(id="active-students-over-time"),
-                dcc.Graph(id="final-result-distribution"),
-                dcc.Graph(id="assessment-score-by-type"),
-            ],
-            style={
-                "display": "grid",
-                "gridTemplateColumns": "repeat(auto-fit, minmax(360px, 1fr))",
-                "gap": "1rem",
-            },
+            style=SECTION_STYLE,
         ),
         html.Section(
             [
-                html.H2(
+                section_header(
+                    "Engagement & Assessment Trends",
+                    "Track course activity, active learners, outcomes, and "
+                    "assessment performance using dashboard-ready mart tables.",
+                ),
+                html.Div(
+                    [
+                        dcc.Graph(id="clicks-over-time"),
+                        dcc.Graph(id="active-students-over-time"),
+                        dcc.Graph(id="final-result-distribution"),
+                        dcc.Graph(id="assessment-score-by-type"),
+                    ],
+                    style=GRAPH_GRID_STYLE,
+                ),
+            ],
+            style=SECTION_STYLE,
+        ),
+        html.Section(
+            [
+                section_header(
+                    "Learning Journey Funnel",
+                    "Summarize how the selected cohort moves from enrollment "
+                    "through activity, assessment submission, and successful outcome.",
+                ),
+                dcc.Graph(id="learning-journey-funnel"),
+            ],
+            style=SECTION_STYLE,
+        ),
+        html.Section(
+            [
+                section_header(
                     "Student Success Signals",
-                    style={"fontSize": "1.35rem", "margin": "1.5rem 0 0.75rem"},
+                    "Compare rule-based student-success signals against withdrawal "
+                    "and assessment outcomes for the selected cohort.",
+                ),
+                html.Ul(
+                    [
+                        html.Li(
+                            "Risk bands are rule-based analytical indicators, "
+                            "not validated predictive ML predictions."
+                        ),
+                        html.Li("Student identifiers are anonymized OULAD IDs."),
+                        html.Li(
+                            "Declining engagement is measured within each student's "
+                            "observed activity window."
+                        ),
+                    ],
+                    style={
+                        "color": DASHBOARD_COLORS["muted"],
+                        "lineHeight": "1.45",
+                        "marginTop": 0,
+                    },
                 ),
                 html.Div(
                     [
@@ -749,31 +975,34 @@ app.layout = html.Div(
                         dcc.Graph(id="risk-band-distribution"),
                         dcc.Graph(id="withdrawal-rate-by-risk-band"),
                     ],
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(360px, 1fr))",
-                        "gap": "1rem",
-                    },
+                    style=GRAPH_GRID_STYLE,
                 ),
-                html.H2(
+            ],
+            style=SECTION_STYLE,
+        ),
+        html.Section(
+            [
+                section_header(
                     "Highest-Risk Student-Module Attempts",
-                    style={"fontSize": "1.35rem", "margin": "1.5rem 0 0.75rem"},
+                    "The table shows up to 50 anonymized student-module attempts "
+                    "with the strongest combination of rule-based risk signals.",
                 ),
                 html.Div(
                     id="student-risk-table",
                     style={
-                        "border": "1px solid #d9e2ec",
+                        "border": f"1px solid {DASHBOARD_COLORS['border']}",
                         "borderRadius": "8px",
-                        "backgroundColor": "white",
+                        "backgroundColor": DASHBOARD_COLORS["surface"],
                     },
                 ),
-            ]
+            ],
+            style=SECTION_STYLE,
         ),
     ],
     style={
         "fontFamily": "Arial, sans-serif",
-        "backgroundColor": "#f5f7fa",
-        "color": "#1f2933",
+        "backgroundColor": DASHBOARD_COLORS["background"],
+        "color": DASHBOARD_COLORS["text"],
         "minHeight": "100vh",
         "padding": "1.5rem",
     },
@@ -799,6 +1028,7 @@ def update_presentation_options(code_module: str | None):
     Output("active-students-over-time", "figure"),
     Output("final-result-distribution", "figure"),
     Output("assessment-score-by-type", "figure"),
+    Output("learning-journey-funnel", "figure"),
     Output("withdrawal-rate-by-declining-engagement", "figure"),
     Output("average-score-by-low-engagement", "figure"),
     Output("risk-band-distribution", "figure"),
@@ -832,6 +1062,7 @@ def update_dashboard(code_module: str | None, code_presentation: str | None):
         build_active_students_figure(engagement),
         build_final_result_figure(students),
         build_assessment_score_figure(assessments),
+        build_learning_journey_funnel_figure(students, success_features),
         build_withdrawal_by_declining_engagement_figure(success_features),
         build_score_by_low_engagement_figure(success_features),
         build_risk_band_count_figure(success_features),
