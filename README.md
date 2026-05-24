@@ -12,7 +12,7 @@ approved mart tables rather than raw, staging, or intermediate data.
 ## Key Business Questions
 
 - How does learner engagement evolve across course presentations?
-- Are declining-engagement students more likely to withdraw?
+- How are engagement patterns associated with withdrawal outcomes?
 - Do low-engagement students score lower?
 - Which anonymized student-module attempts show multiple rule-based risk signals?
 - How can course teams monitor engagement, assessment performance, and
@@ -95,7 +95,7 @@ The Dash dashboard reads from approved dbt mart tables in DuckDB and includes:
 - Final-result distribution.
 - Risk-band distribution.
 - Withdrawal rate by risk band.
-- Declining engagement vs withdrawal rate.
+- Engagement patterns vs withdrawal rate.
 - Low engagement vs average score.
 - Highest-risk anonymized student-module attempts table.
 
@@ -105,7 +105,7 @@ Student-Module Attempts sections.
 
 The dashboard directly supports these student-success questions:
 
-- Did students with declining engagement have higher withdrawal rates?
+- How do engagement patterns relate to withdrawal?
 - Did low-engagement students score lower?
 - Which anonymized student-module attempts show multiple risk signals?
 
