@@ -33,6 +33,8 @@ approved mart tables rather than raw, staging, or intermediate data.
 - Airflow DAG for local pipeline orchestration.
 - Airflow DAG tasks orchestrate raw validation, DuckDB loading, `dbt run`, and
   `dbt test`.
+- Governed aggregate insight-card generator for future LLM-assisted
+  interpretation.
 
 ## Architecture
 
@@ -46,14 +48,16 @@ OULAD raw CSVs
 -> dbt intermediate models
 -> dbt marts
 -> Dash dashboard
--> governed future LLM insight cards
+-> governed aggregate insight cards
+-> future optional LLM-assisted summaries
 ```
 
 The Airflow DAG is implemented under `orchestration/dags/` and is intended for
 local/runtime orchestration of the existing pipeline steps.
 
-The governed LLM insight card layer is planned future work and is not currently
-implemented.
+The governed aggregate insight-card generator is implemented under `insights/`
+and produces deterministic JSON cards for approved marts. External LLM/API-based
+summary generation is planned future work and is not currently implemented.
 
 ## Data Source
 
@@ -180,6 +184,18 @@ DuckDB loading, `dbt run`, and `dbt test`.
 Airflow is not installed in the main Conda environment yet. To use the DAG, an
 Airflow runtime should set `LAIP_PROJECT_ROOT` to the project root.
 
+### Optional: Generate Governed Insight Cards
+
+After the DuckDB warehouse and dbt marts exist, generate deterministic aggregate
+cards:
+
+```bash
+python insights/generate_insight_cards.py
+```
+
+The script writes `data/processed/insight_cards.json`. This output contains
+aggregate cards only, is a runtime artifact, and should not be committed.
+
 ## Repository Hygiene
 
 - Raw CSV files are ignored.
@@ -193,10 +209,10 @@ Airflow runtime should set `LAIP_PROJECT_ROOT` to the project root.
 
 ## LLM Insight Governance
 
-LLM insight generation is planned and governed, but it is not currently
+Governed aggregate insight-card generation is implemented as a deterministic
+prototype. External LLM/API-based narrative generation is not currently
 implemented as a production feature. Future LLM components must consume only
-approved aggregate marts or dashboard summary tables. Raw student-level records
-must not be passed to the LLM.
+approved aggregate marts, generated aggregate cards, or dashboard summary tables.
 
 ## Current Limitations
 
@@ -205,15 +221,15 @@ must not be passed to the LLM.
 - The application is not deployed yet.
 - Airflow DAG exists, but full Airflow runtime setup is not included in the main
   Conda environment yet.
-- Governed LLM insight cards are planned but not implemented yet.
+- Governed aggregate insight-card generation is implemented.
+- External LLM/API-based narrative generation is not implemented.
 - Leakage-aware ML withdrawal/dropout prediction is planned but not implemented
   yet.
-- Screenshots still need to be added.
-- Future work may include deployment, full Airflow runtime setup, governed LLM
-  insight cards, and leakage-aware ML modeling.
+- Future work may include deployment, full Airflow runtime setup, optional
+  LLM-assisted summaries, and leakage-aware ML modeling.
 
 ## Suggested Portfolio Positioning
 
 This project demonstrates analytics engineering, dbt modeling, BI dashboarding,
 data quality testing, CI, Airflow orchestration, learning analytics, and
-responsible design for future AI-assisted insight generation.
+governed aggregate insight cards for responsible future AI-assisted analytics.
