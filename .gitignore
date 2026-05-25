@@ -46,3 +46,6 @@ logs/
 
 # Local Codex configuration
 .codex/config.toml
+
+# Local Codex configuration
+.codex/config.toml
