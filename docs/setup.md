@@ -17,7 +17,7 @@ ruff, and black.
 Use the project root as the working directory:
 
 ```bash
-cd /home/sulfamidas/projects/learning-analytics-intelligence-platform
+cd ~/projects/learning-analytics-intelligence-platform
 ```
 
 If cloning on a new machine, clone the repository first, then open the cloned
@@ -97,14 +97,14 @@ setup. The `orchestration/` folder is reserved for future Airflow DAGs.
 When using Codex in VS Code, open only this project root:
 
 ```text
-/home/sulfamidas/projects/learning-analytics-intelligence-platform
+~/projects/learning-analytics-intelligence-platform
 ```
 
 Do not open the broader `~/projects` directory as the workspace.
 
 ## 10. Expected Project Paths
 
-- Project root: `/home/sulfamidas/projects/learning-analytics-intelligence-platform`
+- Project root: `~/projects/learning-analytics-intelligence-platform`
 - Conda environment: `laip`
 - Raw OULAD data directory: `data/raw/`
 - DuckDB warehouse path: `data/warehouse/laip.duckdb`
