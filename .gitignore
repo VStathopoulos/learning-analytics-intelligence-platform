@@ -43,3 +43,6 @@ logs/
 # OS / editor
 .DS_Store
 .vscode/
+
+# Local Codex configuration
+.codex/config.toml
